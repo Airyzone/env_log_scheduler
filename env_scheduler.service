@@ -1,0 +1,25 @@
+[Unit]
+Description=Env Log Scheduler Service (Independent)
+After=network.target
+
+[Service]
+# 請根據實際使用者修改 (預設為 azureuser)
+User=azureuser
+Group=azureuser
+
+# 專案路徑
+WorkingDirectory=/home/azureuser/webroot/env_log_scheduler
+
+# 環境變數與執行指令
+Environment="PATH=/home/azureuser/webroot/env_log_scheduler/.venv/bin"
+ExecStart=/home/azureuser/webroot/env_log_scheduler/.venv/bin/python main.py
+
+# 重啟策略
+Restart=always
+RestartSec=10
+
+# 確保輸出立即顯示在 log 中
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
