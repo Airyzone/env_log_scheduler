@@ -10,6 +10,8 @@ pymongo==4.3.3       # 保持 PyMongo 版本
 firebase-admin       # Firebase Cloud Messaging
 google-api-core<2.18.0 # Pin google-api-core for Python 3.8 compatibility
 importlib-metadata   # Fix for Python 3.8 compatibility (google-api-core)
+APScheduler==3.10.1   # 排程工具
+
 
 
 # 數據科學庫鎖定到兼容 Python 3.8 的版本
