@@ -55,7 +55,7 @@ if __name__ == "__main__":
     # 註冊 check_alive 任務 (每 15 分鐘執行一次)
     scheduler.add_job(
         run_check_alive,
-        trigger=CronTrigger(minute='*/15'),
+        trigger=CronTrigger(minute='*/5'),
         id='check_alive_periodic',
         name='定期檢查裝置存活狀態',
         replace_existing=True,

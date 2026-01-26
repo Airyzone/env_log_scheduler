@@ -15,18 +15,18 @@ def run_check_alive():
         current_dir = os.path.dirname(os.path.abspath(__file__))
         webroot_dir = os.path.dirname(current_dir)
         
-        # 優先搜尋 env_a 或 env_b (藍綠部署)
-        # 我們檢查 check_alive.py 是否存在於該目錄中
+        # 優先搜尋 env_a, env_b, env (新增 env 以支援本地開發環境)
         active_env_dir = None
-        for suffix in ['a', 'b']:
-            env_path = os.path.join(webroot_dir, f'env_{suffix}')
+        # 搜尋順序: env_a -> env_b -> env -> pet
+        candidates = ['env_a', 'env_b', 'env', 'pet']
+        
+        for cand in candidates:
+            env_path = os.path.join(webroot_dir, cand)
             if os.path.exists(os.path.join(env_path, 'check_alive.py')):
-                # 簡單判斷：如果該目錄存在且有 check_alive.py，則視為潛在目標
-                # 這裡可以根據需要增加更複雜的「活躍環境」判斷邏輯
                 active_env_dir = env_path
                 break
         
-        # 如果沒找到 env_a/b，則回退到舊的 pet 目錄
+        # 如果都沒找到 (理論上不應發生，因為上面已包含 fallback)
         if not active_env_dir:
             active_env_dir = os.path.join(webroot_dir, 'pet')
 
