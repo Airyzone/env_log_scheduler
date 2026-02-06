@@ -206,8 +206,9 @@ def build_log_10min(thing_id=None, days=None, batch_days=7, force=False, delay=0
                 log_10min_db.insert_many(results)
                 thing_inserted += len(results)
 
-            print(f"  {current_start.strftime('%Y-%m-%d') if hasattr(current_start, 'strftime') else str(current_start)} ~ {current_end.strftime('%Y-%m-%d') if hasattr(current_end, 'strftime') else str(current_end)}: "
-                  f"+{len(results)} 筆")
+            if results:
+                print(f"  {current_start.strftime('%Y-%m-%d') if hasattr(current_start, 'strftime') else str(current_start)} ~ {current_end.strftime('%Y-%m-%d') if hasattr(current_end, 'strftime') else str(current_end)}: "
+                      f"+{len(results)} 筆")
 
             if delay > 0:
                 time.sleep(delay)

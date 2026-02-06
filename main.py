@@ -5,6 +5,7 @@ GitHub Copilot - 2025-12-19 15:05:00
 
 import os
 import logging
+from logging.handlers import TimedRotatingFileHandler
 import time
 from datetime import datetime
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -17,10 +18,35 @@ from check_alive_task import run_check_alive
 load_dotenv()
 
 # 設定 logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+LOG_DIR = os.environ.get("ENV_SCHEDULER_LOG_DIR",
+                         os.path.join(os.getcwd(), "logs"))
+os.makedirs(LOG_DIR, exist_ok=True)
+LOG_FILE = os.path.join(LOG_DIR, "env_scheduler.log")
+
+root_logger = logging.getLogger()
+if root_logger.handlers:
+    root_logger.handlers.clear()
+root_logger.setLevel(logging.INFO)
+
+log_formatter = logging.Formatter(
+    '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+file_handler = TimedRotatingFileHandler(
+    LOG_FILE,
+    when="midnight",
+    interval=1,
+    backupCount=14,
+    encoding="utf-8"
 )
+file_handler.setFormatter(log_formatter)
+
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(log_formatter)
+
+root_logger.addHandler(file_handler)
+root_logger.addHandler(stream_handler)
+
+# GPT-5.2-Codex 2026-02-06 17:53:36 CST
 logger = logging.getLogger(__name__)
 
 
