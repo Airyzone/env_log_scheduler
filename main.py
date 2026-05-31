@@ -78,7 +78,7 @@ if __name__ == "__main__":
         misfire_grace_time=3600
     )
 
-    # 註冊 check_alive 任務 (每 15 分鐘執行一次)
+    # 註冊 check_alive 任務 (每 5 分鐘執行一次，實際 silent push 冷卻 10 分鐘)
     scheduler.add_job(
         run_check_alive,
         trigger=CronTrigger(minute='*/5'),

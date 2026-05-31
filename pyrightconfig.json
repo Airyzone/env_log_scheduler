@@ -1,0 +1,14 @@
+{
+    "venvPath": ".",
+    "venv": ".venv",
+    "typeCheckingMode": "basic",
+    "include": [
+        "."
+    ],
+    "exclude": [
+        ".venv",
+        "venv",
+        "**/__pycache__",
+        "**/.pytest_cache"
+    ]
+}
