@@ -1,17 +1,23 @@
-# AGENTS.md – Python Scheduler (env_log_scheduler)
+# AGENTS.md - Python Scheduler (env_log_scheduler)
+
+Read `/Users/ford/Documents/Code/AGENTS.md` first. This file adds project-specific
+rules for `/Users/ford/Documents/Code/Python/env_log_scheduler`.
 
 ## Project Overview
 
-Python background scheduler responsible for building log summaries and performing periodic maintenance tasks (e.g., log aggregation, alive checks).
+Python background scheduler split out from `Python/env`. It builds daily `log_10min` pre-aggregations from raw `log` records, supports incremental updates, and performs scheduled maintenance tasks.
 
 ## Tech Stack
 
 - **Language**: Python
+- **Deployment**: local script execution or Docker
+- **Type Checker**: Pylance / Pyright (`pyrightconfig.json`)
 
-## Language & Locale
+## Scheduler Rules
 
-- **Response language**: Traditional Chinese (zh-TW)
-- **Timezone**: Taiwan (UTC+8) — log timestamps are already in UTC+8, no conversion needed
+- Preserve `log` to `log_10min` aggregation semantics unless the task explicitly changes them
+- Be careful with force rebuild paths such as `build_log_10min.py --force`
+- Treat MongoDB/environment access as external state; do not assume it is available locally
 
 ## Code Style
 
@@ -21,3 +27,8 @@ Python background scheduler responsible for building log summaries and performin
 - No assumptions without evidence
 - If debugging: explain root cause
 - Ensure code runs correctly after modification
+
+## Verification
+
+- Prefer narrow checks such as import/script syntax checks or `build_log_10min.py --status` when environment variables are configured
+- If database or environment access is unavailable, report that clearly instead of pretending verification passed

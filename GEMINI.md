@@ -1,16 +1,9 @@
-# Gemini Instructions – Python Scheduler (env_log_scheduler)
+# GEMINI.md - Python Scheduler (env_log_scheduler)
 
-Language:
-- Python
+Read these files in order:
 
-General:
-- 使用繁體中文 (zh-TW)回答、寫文件、註解
-- 假設台灣時區 (UTC+8)
-- 提供完整的程式碼片段
-- 僅修改必要的區塊
+1. `/Users/ford/Documents/Code/AGENTS.md`
+2. `/Users/ford/Documents/Code/Python/env_log_scheduler/AGENTS.md`
 
-Style:
-- 架構清晰，演算法高效。
-- 不做無證據的假設。
-- 除錯時解釋根本原因。
-- 確保修改後的程式碼可正常執行。
+This file exists only as a Gemini discovery entrypoint. If instructions conflict,
+follow `AGENTS.md`.
