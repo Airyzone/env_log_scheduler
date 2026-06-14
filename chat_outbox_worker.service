@@ -1,0 +1,16 @@
+[Unit]
+Description=Chat Outbox Worker Service
+After=network.target
+
+[Service]
+User=azureuser
+Group=azureuser
+WorkingDirectory=/home/azureuser/webroot/env_log_scheduler
+Environment="PATH=/home/azureuser/webroot/env_log_scheduler/.venv/bin"
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/azureuser/webroot/env_log_scheduler/.venv/bin/python chat_outbox_worker_main.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -24,6 +24,7 @@ numpy==1.21.6
 # ----------------------------------------------------
 gunicorn              # 保持 gunicorn
 PyJWT<2.4.0           # 鎖定 PyJWT 兼容 Python 3.8 的版本
+cryptography          # Life push token encryption/decryption for chat outbox FCM
 jinja2<3.0            # 解決 Flask 1.x 導入問題
 werkzeug<2.0          # 解決 Flask 1.x 導入問題
 itsdangerous<2.0      # 解決 Flask 1.x 導入問題

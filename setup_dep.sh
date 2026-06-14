@@ -5,28 +5,44 @@
 
 set -e
 
-# 定義可能的路徑
-PATHS=(
-    "../env"    # 本地開發環境
-    "../pet"    # 伺服器 (Master Source)
-    "../env_a"  # 伺服器 (Fallback)
-)
-
 TARGET_PATH=""
 
 echo "🔍 正在尋找核心專案 (Core Project)..."
 
-for path in "${PATHS[@]}"; do
-    if [ -d "$path" ] && [ -f "$path/pyproject.toml" ]; then
-        TARGET_PATH="$path"
-        echo "✅ 找到核心專案: $TARGET_PATH"
-        break
+if [ -n "${ENV_CORE_DIR:-}" ]; then
+    if [ -d "$ENV_CORE_DIR" ] && [ -f "$ENV_CORE_DIR/pyproject.toml" ]; then
+        TARGET_PATH="$ENV_CORE_DIR"
+        echo "✅ 使用 ENV_CORE_DIR 指定核心專案: $TARGET_PATH"
+    else
+        echo "❌ ENV_CORE_DIR 無效或缺少 pyproject.toml: $ENV_CORE_DIR"
+        exit 1
     fi
-done
+fi
+
+if [ -z "$TARGET_PATH" ] && [ -L "/etc/nginx/conf.d/current_env.conf" ]; then
+    CURRENT_LINK=$(readlink -f "/etc/nginx/conf.d/current_env.conf")
+    if [[ "$CURRENT_LINK" == *"env_target_a.map" ]]; then
+        TARGET_PATH="../env_a"
+    elif [[ "$CURRENT_LINK" == *"env_target_b.map" ]]; then
+        TARGET_PATH="../env_b"
+    fi
+
+    if [ -n "$TARGET_PATH" ]; then
+        echo "✅ 依正式 nginx 指向選擇核心專案: $TARGET_PATH"
+    fi
+fi
 
 if [ -z "$TARGET_PATH" ]; then
-    echo "❌ 錯誤: 找不到任何核心專案資料夾 (env, pet, env_a)"
-    echo "請確認您與 env 專案位於同一層目錄"
+    # 本地開發環境才使用 ../env；伺服器正式環境應由 nginx symlink 決定 env_a/env_b。
+    if [ -d "../env" ] && [ -f "../env/pyproject.toml" ]; then
+        TARGET_PATH="../env"
+        echo "✅ 使用本地開發核心專案: $TARGET_PATH"
+    fi
+fi
+
+if [ -z "$TARGET_PATH" ]; then
+    echo "❌ 錯誤: 找不到正式核心專案資料夾"
+    echo "請確認 /etc/nginx/conf.d/current_env.conf 指向 env_a/env_b，或用 ENV_CORE_DIR 明確指定"
     exit 1
 fi
 
