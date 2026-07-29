@@ -7,6 +7,7 @@ GitHub Copilot - 2025-12-19 15:15:00
 ## 功能
 - 每日定時將 `log` 表的原始資料聚合成 10 分鐘粒度，存入 `log_10min` 表。
 - 支援智能增量更新，自動跳過已處理的資料。
+- 預聚合成功後，逐批核對 `log_10min.count` 再清理超過 30 天的 raw log。
 - 支援 Docker 部署。
 
 ## 安裝與執行
@@ -43,3 +44,17 @@ python build_log_10min.py --status           # 查看處理狀態
 python build_log_10min.py --days 30          # 重新處理最近 30 天
 python build_log_10min.py --force            # 強制重新處理所有資料
 ```
+
+## Raw log 保留設定
+
+預設保留 30 天，且程式不允許低於 30 天：
+
+```bash
+RAW_LOG_RETENTION_DAYS=30
+RAW_LOG_PRUNE_BATCH_HOURS=24
+RAW_LOG_PRUNE_MAX_BATCHES=7
+RAW_LOG_PRUNE_PAUSE_SECONDS=2
+```
+
+清理只會在每日 `log_10min` 預聚合成功後執行。任一批次的 raw
+筆數與 `log_10min.count` 代表筆數不一致時，該批與後續批次都不會刪除。

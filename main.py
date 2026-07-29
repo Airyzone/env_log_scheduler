@@ -6,8 +6,10 @@ GitHub Copilot - 2025-12-19 15:05:00
 import os
 import logging
 from logging.handlers import TimedRotatingFileHandler
+import subprocess
+import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
@@ -50,6 +52,53 @@ root_logger.addHandler(stream_handler)
 logger = logging.getLogger(__name__)
 
 
+def job_prune_raw_log():
+    """僅清理已由 log_10min 完整涵蓋、且超過保留期的 raw log。"""
+    retention_days = int(os.environ.get("RAW_LOG_RETENTION_DAYS", 30))
+    if retention_days < 30:
+        raise ValueError("RAW_LOG_RETENTION_DAYS 不得小於 30")
+
+    cutoff = (
+        datetime.now().replace(microsecond=0)
+        - timedelta(days=retention_days)
+    )
+    prune_script = os.path.join(os.path.dirname(__file__), "prune_raw_log.py")
+    command = [
+        sys.executable,
+        prune_script,
+        "--cutoff",
+        cutoff.isoformat(),
+        "--batch-hours",
+        os.environ.get("RAW_LOG_PRUNE_BATCH_HOURS", "24"),
+        "--max-batches",
+        os.environ.get("RAW_LOG_PRUNE_MAX_BATCHES", "7"),
+        "--minimum-retention-days",
+        str(retention_days),
+        "--pause-seconds",
+        os.environ.get("RAW_LOG_PRUNE_PAUSE_SECONDS", "2"),
+        "--execute",
+    ]
+
+    logger.info(
+        "開始執行 raw log 清理，保留 %s 天，cutoff=%s",
+        retention_days,
+        cutoff.isoformat(),
+    )
+    result = subprocess.run(
+        command,
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    if result.stdout:
+        for line in result.stdout.splitlines():
+            logger.info("raw log 清理: %s", line)
+    if result.stderr:
+        for line in result.stderr.splitlines():
+            logger.warning("raw log 清理 stderr: %s", line)
+    logger.info("raw log 清理任務完成")
+
+
 def job_build_log_10min():
     """執行預聚合任務"""
     try:
@@ -59,6 +108,12 @@ def job_build_log_10min():
         logger.info("log_10min 預聚合任務完成")
     except Exception as e:
         logger.error(f"log_10min 預聚合任務失敗: {e}", exc_info=True)
+        return
+
+    try:
+        job_prune_raw_log()
+    except Exception as e:
+        logger.error(f"raw log 清理任務失敗: {e}", exc_info=True)
 
 
 if __name__ == "__main__":
