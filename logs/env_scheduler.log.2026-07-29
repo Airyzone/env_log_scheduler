@@ -1,0 +1,18 @@
+2026-07-29 15:07:13,709 - chat_outbox_worker_main - INFO - Starting chat outbox worker from /srv/webroot/env_b
+2026-07-29 15:07:13,710 - chat_outbox_worker_main - INFO - Starting chat outbox worker from /srv/webroot/env_a
+2026-07-29 15:07:13,715 - main - INFO - 開始執行 raw log 清理，保留 30 天，cutoff=2026-06-29T15:07:13
+2026-07-29 15:07:13,715 - main - INFO - raw log 清理任務完成
+2026-07-29 15:07:13,716 - main - INFO - 開始執行 log_10min 預聚合任務...
+2026-07-29 15:07:13,717 - main - INFO - log_10min 預聚合任務完成
+2026-07-29 15:07:13,717 - main - INFO - 開始執行 log_10min 預聚合任務...
+2026-07-29 15:07:13,717 - main - ERROR - log_10min 預聚合任務失敗: aggregation failed
+Traceback (most recent call last):
+  File "/Users/ford/Documents/Code/Python/env_log_scheduler/main.py", line 107, in job_build_log_10min
+    build_log_10min(thing_id=None, days=None, batch_days=7, force=False)
+  File "/Users/ford/.local/share/uv/python/cpython-3.8.20-macos-aarch64-none/lib/python3.8/unittest/mock.py", line 1081, in __call__
+    return self._mock_call(*args, **kwargs)
+  File "/Users/ford/.local/share/uv/python/cpython-3.8.20-macos-aarch64-none/lib/python3.8/unittest/mock.py", line 1085, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+  File "/Users/ford/.local/share/uv/python/cpython-3.8.20-macos-aarch64-none/lib/python3.8/unittest/mock.py", line 1140, in _execute_mock_call
+    raise effect
+RuntimeError: aggregation failed

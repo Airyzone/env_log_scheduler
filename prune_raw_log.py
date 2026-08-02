@@ -20,6 +20,8 @@ from typing import Any, Dict, Optional
 
 import pymongo
 from dotenv import load_dotenv
+from pymongo.collection import Collection
+from pymongo.errors import PyMongoError
 
 
 DEFAULT_MONGODB_URL = "mongodb://localhost:27017"
@@ -59,7 +61,7 @@ def floor_to_batch(value: datetime, batch_hours: int) -> datetime:
 
 
 def load_daily_aggregate_counts(
-    log_10min: pymongo.collection.Collection,
+    log_10min: Collection,
     cutoff: datetime,
     max_time_ms: int,
 ) -> Dict[str, int]:
@@ -86,7 +88,7 @@ def load_daily_aggregate_counts(
 
 
 def aggregate_count_for_range(
-    log_10min: pymongo.collection.Collection,
+    log_10min: Collection,
     start: datetime,
     end: datetime,
     max_time_ms: int,
@@ -113,7 +115,7 @@ def aggregate_count_for_range(
 
 def expected_aggregate_count(
     daily_counts: Dict[str, int],
-    log_10min: pymongo.collection.Collection,
+    log_10min: Collection,
     start: datetime,
     end: datetime,
     max_time_ms: int,
@@ -413,6 +415,6 @@ if __name__ == "__main__":
             ),
         )
         sys.exit(130)
-    except pymongo.errors.PyMongoError as exc:
+    except PyMongoError as exc:
         emit("mongo_error", error=str(exc))
         sys.exit(10)
