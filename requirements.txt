@@ -3,7 +3,6 @@
 # ----------------------------------------------------
 Flask==1.1.2         # 必須鎖定 Flask 1.x (與應用程式架構一致)
 Flask-Cors==3.0.10
-Flask-MQTT==1.1.1
 python-dotenv==0.21.0
 idworker==1.0.1
 pymongo==4.3.3       # 保持 PyMongo 版本
