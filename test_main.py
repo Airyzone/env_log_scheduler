@@ -82,5 +82,52 @@ class RawLogPruneJobTest(unittest.TestCase):
         prune_mock.assert_called_once_with()
 
 
+class PhoneLogCompactionJobTest(unittest.TestCase):
+    @patch.dict(
+        os.environ,
+        {
+            "PHONE_LOG_COMPACTION_ENABLED": "1",
+            "PHONE_LOG_RAW_RETENTION_DAYS": "30",
+            "PHONE_LOG_COMPACTION_BATCH_HOURS": "24",
+            "PHONE_LOG_COMPACTION_MAX_BATCHES": "1",
+            "PHONE_LOG_COMPACTION_PAUSE_SECONDS": "2",
+            "PHONE_LOG_COMPACTION_EXECUTE": "0",
+        },
+        clear=False,
+    )
+    @patch("main.subprocess.run")
+    def test_phone_compaction_defaults_to_dry_run(self, run_mock):
+        run_mock.return_value = Mock(returncode=0, stdout="", stderr="")
+
+        main.job_compress_phone_log()
+
+        command = run_mock.call_args.args[0]
+        self.assertTrue(command[1].endswith("compress_phone_log.py"))
+        self.assertIn("--cutoff", command)
+        self.assertIn("--minimum-retention-days", command)
+        self.assertNotIn("--execute", command)
+        run_mock.assert_called_once_with(
+            command,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+
+    @patch.dict(
+        os.environ,
+        {
+            "PHONE_LOG_COMPACTION_ENABLED": "1",
+            "PHONE_LOG_RAW_RETENTION_DAYS": "29",
+        },
+        clear=False,
+    )
+    @patch("main.subprocess.run")
+    def test_phone_compaction_rejects_retention_below_30(self, run_mock):
+        with self.assertRaisesRegex(ValueError, "不得小於 30"):
+            main.job_compress_phone_log()
+
+        run_mock.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

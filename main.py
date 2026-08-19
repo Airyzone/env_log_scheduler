@@ -115,6 +115,76 @@ def job_build_log_10min():
     except Exception as e:
         logger.error(f"raw log 清理任務失敗: {e}", exc_info=True)
 
+    try:
+        job_compress_phone_log()
+    except Exception as e:
+        logger.error(f"phone_log 壓縮任務失敗: {e}", exc_info=True)
+
+
+def job_compress_phone_log():
+    """Run the guarded phone-log compressor only when explicitly enabled."""
+    enabled = os.environ.get("PHONE_LOG_COMPACTION_ENABLED", "0").strip().lower()
+    if enabled not in {"1", "true", "yes", "on"}:
+        logger.info("phone_log 壓縮任務未啟用，跳過")
+        return
+
+    retention_days = int(
+        os.environ.get("PHONE_LOG_RAW_RETENTION_DAYS", "30")
+    )
+    if retention_days < 30:
+        raise ValueError("PHONE_LOG_RAW_RETENTION_DAYS 不得小於 30")
+
+    cutoff = (
+        datetime.now().replace(microsecond=0)
+        - timedelta(days=retention_days)
+    )
+    compressor_script = os.path.join(
+        os.path.dirname(__file__), "compress_phone_log.py"
+    )
+    command = [
+        sys.executable,
+        compressor_script,
+        "--cutoff",
+        cutoff.isoformat(),
+        "--batch-hours",
+        os.environ.get("PHONE_LOG_COMPACTION_BATCH_HOURS", "24"),
+        "--max-batches",
+        os.environ.get("PHONE_LOG_COMPACTION_MAX_BATCHES", "1"),
+        "--minimum-retention-days",
+        str(retention_days),
+        "--pause-seconds",
+        os.environ.get("PHONE_LOG_COMPACTION_PAUSE_SECONDS", "2"),
+    ]
+    execute = os.environ.get(
+        "PHONE_LOG_COMPACTION_EXECUTE", "0"
+    ).strip().lower()
+    if execute in {"1", "true", "yes", "on"}:
+        command.append("--execute")
+
+    logger.info(
+        "開始執行 phone_log 自適應壓縮，保留 %s 天，cutoff=%s，execute=%s",
+        retention_days,
+        cutoff.isoformat(),
+        execute in {"1", "true", "yes", "on"},
+    )
+    result = subprocess.run(
+        command,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if result.stdout:
+        for line in result.stdout.splitlines():
+            logger.info("phone_log 壓縮: %s", line)
+    if result.stderr:
+        for line in result.stderr.splitlines():
+            logger.warning("phone_log 壓縮 stderr: %s", line)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"phone_log 壓縮工具返回非零狀態: {result.returncode}"
+        )
+    logger.info("phone_log 壓縮任務完成")
+
 
 if __name__ == "__main__":
     # 從環境變數讀取排程時間，預設凌晨 3:00

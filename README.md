@@ -58,3 +58,24 @@ RAW_LOG_PRUNE_PAUSE_SECONDS=2
 
 清理只會在每日 `log_10min` 預聚合成功後執行。任一批次的 raw
 筆數與 `log_10min.count` 代表筆數不一致時，該批與後續批次都不會刪除。
+
+## phone_log 自適應壓縮
+
+`compress_phone_log.py` 不會固定每 10 分鐘只留一點，而是保留移動、轉折、
+Beacon 變化，以及每段的首末點；靜止資料才會稀疏化。輸出放在
+`phone_log_10min`，每筆包含 `source_count`，用來驗證是否完整涵蓋來源 raw
+資料。
+
+排程器預設不啟用此任務。確認 dry-run 結果與地圖軌跡後，才設定：
+
+```bash
+PHONE_LOG_COMPACTION_ENABLED=1
+PHONE_LOG_RAW_RETENTION_DAYS=30
+PHONE_LOG_COMPACTION_MAX_BATCHES=1
+PHONE_LOG_COMPACTION_EXECUTE=0
+```
+
+`PHONE_LOG_COMPACTION_EXECUTE=0` 只做 dry-run；只有明確改成 `1` 才會在
+聚合覆蓋率驗證通過後刪除已表示的 raw rows。無法用於手機軌跡的 invalid
+raw rows 會保留在原集合中，不會阻擋同批有效資料壓縮；invalid 清理需另行
+執行並逐批驗證。

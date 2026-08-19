@@ -1,0 +1,32 @@
+2026-08-02 16:21:42,486 - main - INFO - 開始執行 raw log 清理，保留 30 天，cutoff=2026-07-03T16:21:42
+2026-08-02 16:21:42,487 - main - INFO - raw log 清理任務完成
+2026-08-02 16:21:42,487 - main - INFO - 開始執行 log_10min 預聚合任務...
+2026-08-02 16:21:42,488 - main - INFO - log_10min 預聚合任務完成
+2026-08-02 16:21:42,488 - main - INFO - 開始執行 log_10min 預聚合任務...
+2026-08-02 16:21:42,488 - main - ERROR - log_10min 預聚合任務失敗: aggregation failed
+Traceback (most recent call last):
+  File "/Users/ford/Documents/Code/Python/env_log_scheduler/main.py", line 107, in job_build_log_10min
+    build_log_10min(thing_id=None, days=None, batch_days=7, force=False)
+  File "/Users/ford/.local/share/uv/python/cpython-3.8.20-macos-aarch64-none/lib/python3.8/unittest/mock.py", line 1081, in __call__
+    return self._mock_call(*args, **kwargs)
+  File "/Users/ford/.local/share/uv/python/cpython-3.8.20-macos-aarch64-none/lib/python3.8/unittest/mock.py", line 1085, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+  File "/Users/ford/.local/share/uv/python/cpython-3.8.20-macos-aarch64-none/lib/python3.8/unittest/mock.py", line 1140, in _execute_mock_call
+    raise effect
+RuntimeError: aggregation failed
+2026-08-02 16:27:18,684 - main - INFO - 開始執行 raw log 清理，保留 30 天，cutoff=2026-07-03T16:27:18
+2026-08-02 16:27:18,685 - main - INFO - raw log 清理任務完成
+2026-08-02 16:27:18,686 - main - INFO - 開始執行 log_10min 預聚合任務...
+2026-08-02 16:27:18,686 - main - INFO - log_10min 預聚合任務完成
+2026-08-02 16:27:18,687 - main - INFO - 開始執行 log_10min 預聚合任務...
+2026-08-02 16:27:18,687 - main - ERROR - log_10min 預聚合任務失敗: aggregation failed
+Traceback (most recent call last):
+  File "/Users/ford/Documents/Code/Python/env_log_scheduler/main.py", line 107, in job_build_log_10min
+    build_log_10min(thing_id=None, days=None, batch_days=7, force=False)
+  File "/Users/ford/.local/share/uv/python/cpython-3.8.20-macos-aarch64-none/lib/python3.8/unittest/mock.py", line 1081, in __call__
+    return self._mock_call(*args, **kwargs)
+  File "/Users/ford/.local/share/uv/python/cpython-3.8.20-macos-aarch64-none/lib/python3.8/unittest/mock.py", line 1085, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+  File "/Users/ford/.local/share/uv/python/cpython-3.8.20-macos-aarch64-none/lib/python3.8/unittest/mock.py", line 1140, in _execute_mock_call
+    raise effect
+RuntimeError: aggregation failed
