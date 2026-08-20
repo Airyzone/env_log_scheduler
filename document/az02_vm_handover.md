@@ -87,7 +87,8 @@ env_log_scheduler
 |---|---|---|
 | 延遲工作 | `atd.service` | 執行 `at` 排程；active。spool 目錄目前為 `daemon:daemon`、`0700`；查看 queue 通常需要 root。 |
 | TLS 憑證 | `certbot.timer` | 定期執行憑證 renewal；timer active。憑證與 renewal 設定在 `/etc/letsencrypt`。 |
-| VM watchdog | `env-watchdog.timer` | 每分鐘檢查 API、readiness、資源與 systemd 相關狀態；timer active，`env-watchdog.service` 為被 timer 觸發的 static unit。 |
+| VM watchdog | `env-watchdog.timer` / `env-watchdog.service` | 每分鐘檢查 API、readiness、資源、systemd、MongoDB 掛載、Mongo/Redis/PostgreSQL、Centrifugo、MQTT、scheduler 與 Chat outbox；timer active，watchdog 發現問題時 service 會以 exit 1 留下 failed 狀態。 |
+| Nginx / VM cron 監控 | `/etc/cron.d/azure_monitor` → `/home/azureuser/ops/monitoring/monitor_errors.sh` | 每分鐘檢查前一分鐘 Nginx 5xx、MongoDB 資料碟掛載/空間；通知狀態以 `/home/azureuser/ops/monitoring/state/` 去重。 |
 | Azure VM Agent | `walinuxagent.service` | Azure VM provisioning、extension 與平台整合；active。 |
 | Azure monitoring | `omsagent-cb2fd482-a346-4119-bc09-03fae8e76ab8.service`、`omid.service` | Log Analytics / OMI 監控資料收集；OMS agent 與 OMI 均在運作。 |
 | Dependency Agent | `microsoft-dependency-agent` 相關程序 | `microsoft-dependency-agent-manager` 與 child process 均可見；legacy generated unit 顯示為 inactive 時，不要只依 unit 名稱判斷，需同時查看程序與 Azure Monitor 狀態。 |
@@ -142,13 +143,21 @@ curl -fsS http://127.0.0.1:5002/health/live
 │   ├── env_a/                  # API 藍綠 A 槽，Gunicorn :5000
 │   ├── env_b/                  # API 藍綠 B 槽，Gunicorn :5002，目前 active
 │   ├── env_log_scheduler/      # log 預聚合、raw log 維護、check_alive、Chat outbox worker
-│   ├── pet/                    # 手動/開發用 Pet app 與部署切換腳本
+│   ├── pet/                    # Pet app、手動啟停與藍綠部署工具；不放 VM 監控設定
 │   ├── envsys/                 # EnvSys 靜態網站
 │   ├── cemesys/                # CemeSys 靜態網站
 │   ├── cosafetysys/             # CosafetySys 靜態網站
 │   └── test/                   # 測試靜態網站
-└── monitoring.env              # watchdog/通知用私密設定；目前權限為 0600，不應同步回 Git
+└── ops/
+    ├── monitoring/             # VM 監控腳本、monitoring.env 與去重狀態
+    └── legacy/                 # 搬遷前檔案與備份；不被 service/cron 引用
 ```
+
+VM 監控與告警腳本集中在 `/home/azureuser/ops/monitoring/`；人工執行的
+`manage_env.sh` 依操作習慣保留在 `/home/azureuser/webroot/pet/`，但它讀取的
+監控設定仍集中在 ops。`/home/azureuser/ops/monitoring/monitoring.env` 是私密設定，權限應維持
+`0600`，不應同步回 Git。`webroot/pet/` 保留 Pet 應用程式與手動啟停工具，避免
+把 VM 健康告警誤認為 Pet 應用程式的一部分。
 
 應用程式樹的 owner 基準是 `azureuser:azureuser`。本次完整掃描 `/home/azureuser/webroot` 沒有發現 root-owned 檔案；整個 `/home/azureuser` 的 root-owned 殘留 `.rnd` 也已修正為 `azureuser:azureuser`、`0600`。
 
@@ -263,6 +272,29 @@ ExecStart=/usr/bin/redis-server /etc/redis/redis.conf --daemonize no
 - `main.py` 的啟動 log 仍寫「每 15 分鐘」，這是過時訊息；維運判斷應以實際程式碼與 journal 執行紀錄為準。
 - raw log 清理只有在 `log_10min` 聚合成功後才執行，且保留天數不得低於 30 天。
 - `phone_log` 壓縮功能受環境變數保護；不要在未確認 dry-run、覆蓋率與資料備份前開啟 execute。
+
+### Discord 告警機制與目前門檻
+
+告警秘密統一由 `/home/azureuser/ops/monitoring/monitoring.env` 提供，權限應維持
+`azureuser:azureuser`、`0600`；active 腳本不應出現 webhook URL。現行路徑如下：
+
+- `/etc/cron.d/azure_monitor` 每分鐘執行 `/home/azureuser/ops/monitoring/monitor_errors.sh`：偵測前一分鐘 `env.airyzone.com` 的 Nginx 5xx、`/mnt/mongodb` 非掛載/UUID 不符，以及 MongoDB 資料碟使用率達 90%；相同狀態只通知一次，恢復時通知一次。
+- `env-watchdog.timer` 每分鐘執行 `/home/azureuser/ops/monitoring/vm_watchdog.sh`：檢查 `env_a`/`env_b` readiness、所有關鍵 systemd service、failed units、公開 readiness、Redis `PONG`、PostgreSQL `pg_isready`、MongoDB ping、Centrifugo `/health`、MQTT 1883 listener、root/MongoDB 空間與 inode、Gunicorn timeout。
+- watchdog 另檢查 scheduler：`log_10min` 成功標記不可超過 30 小時，並追蹤聚合、raw-log 清理、phone-log 壓縮與 `check_alive` 最近結果。
+- watchdog 另以唯讀 SQL 檢查 `life_chat.chat_outbox_events`：未發布事件達 100 筆、最老事件超過 300 秒、或 `attempts >= 5` 立即告警；近 5 分鐘 Chat FCM 失敗達 10 次也告警。
+- `/home/azureuser/webroot/pet/manage_env.sh` 的 deploy/switch/rollback 事件也使用同一個 `/home/azureuser/ops/monitoring/monitoring.env`；預設以所在的 `webroot/pet` 為部署來源，傳送採 timeout、HTTP failure 與 JSON escaping 保護。
+
+2026-08-20 22:11 的搬遷後驗證：三支 active 腳本 hash 與 repo 相同、權限分別為
+`750/750/750`，`monitoring.env` 為 `0600`，且沒有硬編碼 webhook。自然 timer
+週期已由新路徑執行；`env-watchdog.service` 目前仍因既有
+`scheduler-failure:raw-log` 以 exit 1 告警，並非搬遷錯誤。舊檔案與歷史備份已可回復地
+移至 `/home/azureuser/ops/legacy/20260820220642/`，不再位於 active webroot 的監控路徑。
+
+目前需要接手人注意：
+
+1. `env_log_scheduler` 在 2026-08-20 03:00 的 raw-log 清理失敗；watchdog 已正確發出功能性告警，`env_log_scheduler.service` 本身仍 active。先讀取完整錯誤、確認涵蓋率與備份，再決定是否修復，不要直接執行刪除。
+2. webhook 已從 active 腳本移除，但新的 Discord webhook URL 尚未提供，因此仍需在 Discord 端旋轉舊 URL，再只更新 `monitoring.env` 的 `DISCORD_URL`，不要把值寫回腳本或 Git。
+3. watchdog 在有告警時會使 `env-watchdog.service` 顯示 failed；這是故障訊號，不代表 timer 停止。確認問題恢復後，應看到下一次 watchdog recovery，且 timer 仍為 active。
 
 ### 憑證與已停用 renewal
 
