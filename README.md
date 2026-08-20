@@ -54,10 +54,16 @@ RAW_LOG_RETENTION_DAYS=30
 RAW_LOG_PRUNE_BATCH_HOURS=24
 RAW_LOG_PRUNE_MAX_BATCHES=7
 RAW_LOG_PRUNE_PAUSE_SECONDS=2
+# 只在確認歷史 mismatch bucket 不應刪除、但仍要繼續清理後續安全 bucket 時啟用
+RAW_LOG_PRUNE_CONTINUE_ON_MISMATCH=0
+# continue mode 的最大掃描數；避免為了找安全 bucket 無限制掃描
+RAW_LOG_PRUNE_MAX_SCANNED_BATCHES=70
 ```
 
 清理只會在每日 `log_10min` 預聚合成功後執行。任一批次的 raw
-筆數與 `log_10min.count` 代表筆數不一致時，該批與後續批次都不會刪除。
+筆數與 `log_10min.count` 代表筆數不一致時，預設停止且不刪除。若明確啟用
+`RAW_LOG_PRUNE_CONTINUE_ON_MISMATCH=1`，該 mismatch 批次會保留 raw 並記錄
+`batch_skipped`，只繼續處理後續覆蓋率一致的批次；這不代表 mismatch 批次已修復。
 
 ## phone_log 自適應壓縮
 

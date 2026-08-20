@@ -7,7 +7,9 @@
 2. cutoff 必須明確指定，且不得侵入最低保留天數。
 3. 每個批次先比對 raw 筆數與 log_10min.count 代表的原始筆數。
 4. 只有 thing_id 為 null 的舊資料允許沒有 log_10min 對應資料。
-5. 任一批次驗證不一致就停止，不會跳過後繼資料。
+5. 預設任一批次驗證不一致就停止，不會跳過後繼資料。
+6. 明確啟用 continue mode 時，mismatch bucket 只保留不刪除，並繼續
+   掃描後續 bucket；不會以不一致的資料作為刪除依據。
 """
 
 import argparse
@@ -22,6 +24,7 @@ import pymongo
 from dotenv import load_dotenv
 from pymongo.collection import Collection
 from pymongo.errors import PyMongoError
+from legacy_datetime import legacy_taiwan_now, parse_legacy_taiwan_datetime
 
 
 DEFAULT_MONGODB_URL = "mongodb://localhost:27017"
@@ -41,15 +44,14 @@ def emit(event: str, **fields: Any) -> None:
 
 def parse_datetime(value: str) -> datetime:
     try:
-        parsed = datetime.fromisoformat(value)
+        # CLI input may be naive Taiwan wall-clock or an aware ISO value.
+        # Normalize both to the legacy naive storage clock; existing Mongo
+        # values are never shifted.
+        parsed = parse_legacy_taiwan_datetime(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(
             "時間格式必須是 ISO 8601，例如 2026-06-29T03:00:00"
         ) from exc
-    if parsed.tzinfo is not None:
-        raise argparse.ArgumentTypeError(
-            "本專案 Mongo 時間使用台灣牆上時間的 naive datetime，請勿附加時區"
-        )
     return parsed
 
 
@@ -70,6 +72,9 @@ def load_daily_aggregate_counts(
         {
             "$group": {
                 "_id": {
+                    # Legacy BSON dates encode the Taiwan wall-clock label
+                    # directly. Do not add timezone=+08:00 here: that would
+                    # shift every existing historical date by another 8 hours.
                     "$dateToString": {
                         "format": "%Y-%m-%d",
                         "date": "$datetime",
@@ -173,6 +178,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="本次最多處理幾批，預設只處理 1 批",
     )
     parser.add_argument(
+        "--max-scanned-batches",
+        type=int,
+        help=(
+            "continue mode 本次最多掃描幾批；未指定時等於 max-batches，"
+            "避免無限制掃描"
+        ),
+    )
+    parser.add_argument(
         "--minimum-retention-days",
         type=int,
         default=30,
@@ -195,6 +208,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="實際執行刪除；未提供時只做 dry-run",
     )
+    parser.add_argument(
+        "--continue-on-mismatch",
+        action="store_true",
+        help=(
+            "保留 coverage mismatch bucket 不刪除，繼續掃描後續 bucket；"
+            "只適合已知的歷史 aggregate 不一致狀況"
+        ),
+    )
     return parser
 
 
@@ -215,10 +236,12 @@ def main() -> int:
         )
     if args.max_batches <= 0:
         raise SystemExit("--max-batches 必須大於 0")
+    if args.max_scanned_batches is not None and args.max_scanned_batches <= 0:
+        raise SystemExit("--max-scanned-batches 必須大於 0")
     if args.minimum_retention_days < 7:
         raise SystemExit("--minimum-retention-days 不得小於原設計的 7 天")
 
-    now = datetime.now()
+    now = legacy_taiwan_now()
     latest_allowed_cutoff = now - timedelta(
         days=args.minimum_retention_days
     )
@@ -256,7 +279,9 @@ def main() -> int:
         cutoff=args.cutoff,
         batch_hours=args.batch_hours,
         max_batches=args.max_batches,
+        max_scanned_batches=args.max_scanned_batches or args.max_batches,
         minimum_retention_days=args.minimum_retention_days,
+        continue_on_mismatch=args.continue_on_mismatch,
         replica_set=hello.get("setName"),
     )
 
@@ -268,29 +293,52 @@ def main() -> int:
     emit("aggregate_audit_loaded", days=len(aggregate_counts))
 
     processed_batches = 0
+    scanned_batches = 0
+    skipped_batches = 0
     deleted_total = 0
+    next_batch_start = None
+    scan_limit = args.max_scanned_batches or args.max_batches
 
-    while processed_batches < args.max_batches:
-        oldest = raw_log.find_one(
-            {"datetime": {"$lt": args.cutoff}},
-            {"_id": 0, "datetime": 1},
-            sort=[("datetime", pymongo.ASCENDING)],
-            hint=RAW_DATETIME_INDEX,
-        )
-        if not oldest:
+    while (
+        processed_batches < args.max_batches
+        and scanned_batches < scan_limit
+    ):
+        if next_batch_start is None:
+            oldest = raw_log.find_one(
+                {"datetime": {"$lt": args.cutoff}},
+                {"_id": 0, "datetime": 1},
+                sort=[("datetime", pymongo.ASCENDING)],
+                hint=RAW_DATETIME_INDEX,
+            )
+            if not oldest:
+                emit(
+                    "complete",
+                    processed_batches=processed_batches,
+                    scanned_batches=scanned_batches,
+                    skipped_batches=skipped_batches,
+                    deleted_total=deleted_total,
+                )
+                return 0
+
+            oldest_datetime = oldest.get("datetime")
+            if not isinstance(oldest_datetime, datetime):
+                emit("blocked", reason="oldest datetime is not a BSON date")
+                return 2
+
+            batch_start = floor_to_batch(oldest_datetime, args.batch_hours)
+        else:
+            batch_start = next_batch_start
+
+        if batch_start >= args.cutoff:
             emit(
                 "complete",
                 processed_batches=processed_batches,
+                scanned_batches=scanned_batches,
+                skipped_batches=skipped_batches,
                 deleted_total=deleted_total,
             )
             return 0
 
-        oldest_datetime = oldest.get("datetime")
-        if not isinstance(oldest_datetime, datetime):
-            emit("blocked", reason="oldest datetime is not a BSON date")
-            return 2
-
-        batch_start = floor_to_batch(oldest_datetime, args.batch_hours)
         batch_end = min(
             batch_start + timedelta(hours=args.batch_hours),
             args.cutoff,
@@ -328,10 +376,11 @@ def main() -> int:
         coverage_matches = (
             raw_count == represented_count + null_thing_count
         )
+        scanned_batches += 1
 
         emit(
             "batch_audit",
-            batch=processed_batches + 1,
+            batch=scanned_batches,
             start=batch_start,
             end=batch_end,
             raw_count=raw_count,
@@ -341,13 +390,25 @@ def main() -> int:
         )
 
         if not coverage_matches:
+            if not args.continue_on_mismatch:
+                emit(
+                    "blocked",
+                    reason="raw 與 log_10min 代表筆數不一致",
+                    start=batch_start,
+                    end=batch_end,
+                )
+                return 3
+
+            skipped_batches += 1
+            next_batch_start = batch_end
             emit(
-                "blocked",
-                reason="raw 與 log_10min 代表筆數不一致",
+                "batch_skipped",
+                reason="raw 與 log_10min 代表筆數不一致；保留 raw，繼續後續 bucket",
                 start=batch_start,
                 end=batch_end,
+                retained_count=raw_count,
             )
-            return 3
+            continue
 
         if not args.execute:
             emit(
@@ -383,6 +444,7 @@ def main() -> int:
 
         processed_batches += 1
         deleted_total += delete_result.deleted_count
+        next_batch_start = batch_end
         emit(
             "batch_deleted",
             batch=processed_batches,
@@ -398,6 +460,8 @@ def main() -> int:
     emit(
         "run_limit_reached",
         processed_batches=processed_batches,
+        scanned_batches=scanned_batches,
+        skipped_batches=skipped_batches,
         deleted_total=deleted_total,
     )
     return 0

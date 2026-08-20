@@ -4,6 +4,9 @@ GitHub Copilot - 2025-12-19 15:00:00
 建立 log_10min 預聚合資料表（智能版）
 
 此腳本將 log 表的原始資料聚合成 10 分鐘粒度，存入 log_10min 表
+
+時間契約：既有 Mongo datetime 是台灣牆上時間的 naive 值。這裡必須
+使用同一個儲存時鐘，不可替既有資料再加上 UTC+8。
 """
 
 import os
@@ -12,6 +15,7 @@ import pymongo
 from datetime import datetime, timedelta
 import argparse
 from dotenv import load_dotenv
+from legacy_datetime import legacy_taiwan_now
 
 load_dotenv()
 
@@ -111,7 +115,7 @@ def build_log_10min(thing_id=None, days=None, batch_days=7, force=False, delay=0
         print(f"智能模式：將跳過已處理的時間範圍")
 
     interval_ms = 10 * 60 * 1000  # 10 分鐘
-    now = datetime.now()
+    now = legacy_taiwan_now()
     total_things_processed = 0
     total_records_inserted = 0
 

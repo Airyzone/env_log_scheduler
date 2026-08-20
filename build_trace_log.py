@@ -4,6 +4,9 @@ GitHub Copilot - 2026-01-09
 建立 trace_log 軌跡資料表 (高效能回補版)
 
 此腳本用於將原始 log 表轉換為 trace_log 軌跡表。
+
+時間契約：既有 Mongo datetime 是台灣牆上時間的 naive 值；手動回補也
+必須使用同一個儲存時鐘，不可依賴主機的 local timezone。
 優化點：
 1. 針對單一裝置 (thing_id) 進行批次查詢，避免全表掃描 O(N*M)。
 2. 快取 Thing 和 Detector 的 Metadata，減少資料庫讀取。
@@ -16,6 +19,7 @@ import pymongo
 from datetime import datetime, timedelta
 import argparse
 from dotenv import load_dotenv
+from legacy_datetime import legacy_taiwan_now
 
 load_dotenv()
 
@@ -253,7 +257,7 @@ def build_trace_log(thing_id=None, days=None, batch_days=30, force=False, delay=
     status_map = get_process_status(client, collection_name) if not force else {}
     
     print(f"共有 {len(target_things)} 個裝置需處理")
-    now = datetime.now()
+    now = legacy_taiwan_now()
     
     total_sessions = 0
     

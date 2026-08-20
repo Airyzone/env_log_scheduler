@@ -19,6 +19,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import pymongo
 from pymongo import UpdateOne
 from pymongo.errors import PyMongoError
+from legacy_datetime import legacy_taiwan_now, parse_legacy_taiwan_datetime
 
 from phone_path_compression import (
     AdaptivePhonePathCompressor,
@@ -52,15 +53,13 @@ def emit(event: str, **fields: Any) -> None:
 
 def parse_datetime(value: str) -> datetime:
     try:
-        parsed = datetime.fromisoformat(value)
+        # Keep the legacy Mongo storage clock: naive input is Taiwan wall
+        # time; aware input is converted to Taiwan before tzinfo is removed.
+        parsed = parse_legacy_taiwan_datetime(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(
             "時間格式必須是 ISO 8601，例如 2026-06-29T03:00:00"
         ) from exc
-    if parsed.tzinfo is not None:
-        raise argparse.ArgumentTypeError(
-            "本專案 Mongo 時間使用 naive datetime，請勿附加時區"
-        )
     return parsed
 
 
@@ -304,7 +303,7 @@ def main() -> int:
     if args.start is not None and args.start >= args.cutoff:
         raise SystemExit("--start 必須早於 --cutoff")
 
-    latest_allowed_cutoff = datetime.now() - timedelta(
+    latest_allowed_cutoff = legacy_taiwan_now() - timedelta(
         days=args.minimum_retention_days
     )
     if args.cutoff > latest_allowed_cutoff:

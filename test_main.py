@@ -41,6 +41,32 @@ class RawLogPruneJobTest(unittest.TestCase):
 
     @patch.dict(
         os.environ,
+        {
+            "RAW_LOG_RETENTION_DAYS": "30",
+            "RAW_LOG_PRUNE_BATCH_HOURS": "24",
+            "RAW_LOG_PRUNE_MAX_BATCHES": "7",
+            "RAW_LOG_PRUNE_MAX_SCANNED_BATCHES": "70",
+            "RAW_LOG_PRUNE_CONTINUE_ON_MISMATCH": "1",
+            "RAW_LOG_PRUNE_PAUSE_SECONDS": "2",
+        },
+        clear=False,
+    )
+    @patch("main.subprocess.run")
+    def test_prune_job_can_continue_past_legacy_mismatch(self, run_mock):
+        run_mock.return_value = Mock(stdout="", stderr="")
+
+        main.job_prune_raw_log()
+
+        command = run_mock.call_args.args[0]
+        self.assertIn("--continue-on-mismatch", command)
+        self.assertEqual(
+            command[command.index("--max-scanned-batches") + 1],
+            "70",
+        )
+        self.assertIn("--execute", command)
+
+    @patch.dict(
+        os.environ,
         {"RAW_LOG_RETENTION_DAYS": "29"},
         clear=False,
     )
@@ -50,6 +76,33 @@ class RawLogPruneJobTest(unittest.TestCase):
             main.job_prune_raw_log()
 
         run_mock.assert_not_called()
+
+    @patch.dict(
+        os.environ,
+        {
+            "RAW_LOG_RETENTION_DAYS": "30",
+            "RAW_LOG_PRUNE_BATCH_HOURS": "24",
+            "RAW_LOG_PRUNE_MAX_BATCHES": "7",
+            "RAW_LOG_PRUNE_PAUSE_SECONDS": "2",
+        },
+        clear=False,
+    )
+    @patch("main.subprocess.run")
+    def test_prune_job_logs_child_output_when_exit_code_is_nonzero(
+        self, run_mock
+    ):
+        error = main.subprocess.CalledProcessError(
+            3,
+            ["prune_raw_log.py"],
+            output='{"event":"batch_audit"}',
+            stderr="coverage mismatch",
+        )
+        run_mock.side_effect = error
+
+        with self.assertRaises(main.subprocess.CalledProcessError):
+            main.job_prune_raw_log()
+
+        run_mock.assert_called_once()
 
     @patch("main.job_prune_raw_log")
     @patch("main.build_log_10min")

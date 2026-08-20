@@ -8,6 +8,12 @@ from unittest.mock import patch
 import compress_phone_log
 
 
+def test_parse_datetime_converts_aware_input_to_legacy_wall_clock():
+    assert compress_phone_log.parse_datetime(
+        "2026-08-18T19:00:00Z"
+    ) == datetime(2026, 8, 19, 3, 0, 0)
+
+
 def _matches(document, query):
     for key, expected in query.items():
         if key == "$or":

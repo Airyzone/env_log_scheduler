@@ -9,12 +9,15 @@ from logging.handlers import TimedRotatingFileHandler
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
 from build_log_10min import build_log_10min
 from check_alive_task import run_check_alive
+from legacy_datetime import legacy_taiwan_now
+
+SCHEDULER_TIMEZONE = "Asia/Taipei"
 
 # 載入環境變數
 load_dotenv()
@@ -52,6 +55,17 @@ root_logger.addHandler(stream_handler)
 logger = logging.getLogger(__name__)
 
 
+def _log_subprocess_output(label, stdout, stderr):
+    """Keep guarded maintenance failures diagnosable in the scheduler log."""
+
+    if stdout:
+        for line in stdout.splitlines():
+            logger.info("%s: %s", label, line)
+    if stderr:
+        for line in stderr.splitlines():
+            logger.warning("%s stderr: %s", label, line)
+
+
 def job_prune_raw_log():
     """僅清理已由 log_10min 完整涵蓋、且超過保留期的 raw log。"""
     retention_days = int(os.environ.get("RAW_LOG_RETENTION_DAYS", 30))
@@ -59,7 +73,7 @@ def job_prune_raw_log():
         raise ValueError("RAW_LOG_RETENTION_DAYS 不得小於 30")
 
     cutoff = (
-        datetime.now().replace(microsecond=0)
+        legacy_taiwan_now().replace(microsecond=0)
         - timedelta(days=retention_days)
     )
     prune_script = os.path.join(os.path.dirname(__file__), "prune_raw_log.py")
@@ -76,26 +90,37 @@ def job_prune_raw_log():
         str(retention_days),
         "--pause-seconds",
         os.environ.get("RAW_LOG_PRUNE_PAUSE_SECONDS", "2"),
-        "--execute",
     ]
+    max_scanned_batches = os.environ.get(
+        "RAW_LOG_PRUNE_MAX_SCANNED_BATCHES"
+    )
+    if max_scanned_batches:
+        command.extend(["--max-scanned-batches", max_scanned_batches])
+    continue_on_mismatch = os.environ.get(
+        "RAW_LOG_PRUNE_CONTINUE_ON_MISMATCH", "0"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if continue_on_mismatch:
+        command.append("--continue-on-mismatch")
+    command.append("--execute")
 
     logger.info(
-        "開始執行 raw log 清理，保留 %s 天，cutoff=%s",
+        "開始執行 raw log 清理，保留 %s 天，cutoff=%s，"
+        "continue_on_mismatch=%s",
         retention_days,
         cutoff.isoformat(),
+        continue_on_mismatch,
     )
-    result = subprocess.run(
-        command,
-        check=True,
-        text=True,
-        capture_output=True,
-    )
-    if result.stdout:
-        for line in result.stdout.splitlines():
-            logger.info("raw log 清理: %s", line)
-    if result.stderr:
-        for line in result.stderr.splitlines():
-            logger.warning("raw log 清理 stderr: %s", line)
+    try:
+        result = subprocess.run(
+            command,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as error:
+        _log_subprocess_output("raw log 清理", error.stdout, error.stderr)
+        raise
+    _log_subprocess_output("raw log 清理", result.stdout, result.stderr)
     logger.info("raw log 清理任務完成")
 
 
@@ -135,7 +160,7 @@ def job_compress_phone_log():
         raise ValueError("PHONE_LOG_RAW_RETENTION_DAYS 不得小於 30")
 
     cutoff = (
-        datetime.now().replace(microsecond=0)
+        legacy_taiwan_now().replace(microsecond=0)
         - timedelta(days=retention_days)
     )
     compressor_script = os.path.join(
@@ -173,12 +198,7 @@ def job_compress_phone_log():
         text=True,
         capture_output=True,
     )
-    if result.stdout:
-        for line in result.stdout.splitlines():
-            logger.info("phone_log 壓縮: %s", line)
-    if result.stderr:
-        for line in result.stderr.splitlines():
-            logger.warning("phone_log 壓縮 stderr: %s", line)
+    _log_subprocess_output("phone_log 壓縮", result.stdout, result.stderr)
     if result.returncode != 0:
         raise RuntimeError(
             f"phone_log 壓縮工具返回非零狀態: {result.returncode}"
@@ -196,7 +216,11 @@ if __name__ == "__main__":
     # 註冊任務
     scheduler.add_job(
         job_build_log_10min,
-        trigger=CronTrigger(hour=hour, minute=minute),
+        trigger=CronTrigger(
+            hour=hour,
+            minute=minute,
+            timezone=SCHEDULER_TIMEZONE,
+        ),
         id='build_log_10min_daily',
         name='每日 log_10min 預聚合',
         replace_existing=True,
@@ -206,7 +230,10 @@ if __name__ == "__main__":
     # 註冊 check_alive 任務 (每 5 分鐘執行一次，實際 silent push 冷卻 10 分鐘)
     scheduler.add_job(
         run_check_alive,
-        trigger=CronTrigger(minute='*/5'),
+        trigger=CronTrigger(
+            minute='*/5',
+            timezone=SCHEDULER_TIMEZONE,
+        ),
         id='check_alive_periodic',
         name='定期檢查裝置存活狀態',
         replace_existing=True,
