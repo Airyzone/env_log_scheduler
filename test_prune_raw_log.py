@@ -58,6 +58,15 @@ class _Collection:
     def count_documents(self, query, **_kwargs):
         return sum(_matches(document, query) for document in self.documents)
 
+    def aggregate(self, pipeline, **_kwargs):
+        match = pipeline[0]["$match"]
+        represented = sum(
+            document.get("count", 0)
+            for document in self.documents
+            if _matches(document, match)
+        )
+        return [{"_id": None, "represented": represented}] if represented else []
+
     def delete_many(self, query, **_kwargs):
         kept = [
             document
@@ -70,9 +79,9 @@ class _Collection:
 
 
 class _Database:
-    def __init__(self, raw_documents):
+    def __init__(self, raw_documents, aggregate_documents=None):
         self.log = _Collection(raw_documents)
-        self.log_10min = _Collection([])
+        self.log_10min = _Collection(aggregate_documents or [])
 
 
 class _Admin:
@@ -83,8 +92,8 @@ class _Admin:
 
 
 class _Client:
-    def __init__(self, raw_documents):
-        self.env = _Database(raw_documents)
+    def __init__(self, raw_documents, aggregate_documents=None):
+        self.env = _Database(raw_documents, aggregate_documents)
         self.admin = _Admin()
 
     def close(self):
@@ -143,8 +152,53 @@ def test_mismatch_still_stops_by_default():
     assert len(client.env.log.documents) == 3
 
 
+def test_initial_batch_start_preserves_non_midnight_cleanup_boundary():
+    oldest = datetime(2026, 6, 29, 3, 0, 8)
+
+    assert prune_raw_log.initial_batch_start(oldest) == datetime(
+        2026,
+        6,
+        29,
+        3,
+    )
+
+
+def test_initial_batch_keeps_original_calendar_batch_end():
+    oldest = datetime(2026, 6, 29, 3, 0, 8)
+
+    assert prune_raw_log.initial_batch_end(oldest, 24) == datetime(
+        2026,
+        6,
+        30,
+    )
+
+
+def test_first_batch_audit_uses_adjusted_start_and_calendar_end():
+    client = _Client(
+        [
+            {
+                "_id": "remaining",
+                "thing_id": 1,
+                "datetime": datetime(2026, 6, 29, 3, 0, 8),
+            }
+        ],
+        [{"datetime": datetime(2026, 6, 29, 3), "count": 1}],
+    )
+
+    return_code, events = _run_main(client, *_common_arguments())
+
+    audit = next(event for event in events if event["event"] == "batch_audit")
+    assert return_code == 0
+    assert audit["start"] == "2026-06-29T03:00:00"
+    assert audit["end"] == "2026-06-30T00:00:00"
+    assert audit["coverage_matches"] is True
+
+
 def test_continue_on_mismatch_retains_bad_bucket_and_deletes_next_safe_bucket():
-    client = _Client(_raw_documents())
+    client = _Client(
+        _raw_documents(),
+        [{"datetime": datetime(2026, 6, 30, 1), "count": 1}],
+    )
 
     return_code, events = _run_main(
         client,

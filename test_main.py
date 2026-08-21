@@ -1,6 +1,14 @@
 import os
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
+
+# Tests import main, whose file handler otherwise defaults to the repository's
+# production-style logs/ directory. Keep mock results out of that log path.
+os.environ.setdefault(
+    "ENV_SCHEDULER_LOG_DIR",
+    tempfile.mkdtemp(prefix="env_log_scheduler_test_"),
+)
 
 import main
 

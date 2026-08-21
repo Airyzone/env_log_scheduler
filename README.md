@@ -65,6 +65,11 @@ RAW_LOG_PRUNE_MAX_SCANNED_BATCHES=70
 `RAW_LOG_PRUNE_CONTINUE_ON_MISMATCH=1`，該 mismatch 批次會保留 raw 並記錄
 `batch_skipped`，只繼續處理後續覆蓋率一致的批次；這不代表 mismatch 批次已修復。
 
+第一批會從最早剩餘 raw 所在的 10 分鐘 aggregate bucket 開始，但在原本的
+日曆批次邊界結束；之後才依 `RAW_LOG_PRUNE_BATCH_HOURS` 以日曆批次向後分批。
+這可處理先前清理已在非午夜時間停止的資料邊界，又不會把下一個批次提前併入。
+若最早 aggregate bucket 本身的 coverage 不一致，仍會停止並保留 raw。
+
 ## phone_log 自適應壓縮
 
 `compress_phone_log.py` 不會固定每 10 分鐘只留一點，而是保留移動、轉折、

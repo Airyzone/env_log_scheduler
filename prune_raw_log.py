@@ -10,6 +10,11 @@
 5. 預設任一批次驗證不一致就停止，不會跳過後繼資料。
 6. 明確啟用 continue mode 時，mismatch bucket 只保留不刪除，並繼續
    掃描後續 bucket；不會以不一致的資料作為刪除依據。
+
+第一批從最早剩餘 raw 所在的 10 分鐘 aggregate bucket 開始，而不是把它
+向下切回午夜或其他日曆批次邊界；第一批的結束仍維持原本日曆批次邊界。
+這能保留先前以非午夜 cutoff 清理後的邊界，又不會把下一個日曆批次提前
+併入同一次審核。若同一個 aggregate bucket 仍有 coverage mismatch，仍會停止。
 """
 
 import argparse
@@ -29,6 +34,7 @@ from legacy_datetime import legacy_taiwan_now, parse_legacy_taiwan_datetime
 
 DEFAULT_MONGODB_URL = "mongodb://localhost:27017"
 RAW_DATETIME_INDEX = "datetime_1"
+LOG_10MIN_BUCKET_MINUTES = 10
 
 
 def _json_default(value: Any) -> str:
@@ -60,6 +66,23 @@ def floor_to_batch(value: datetime, batch_hours: int) -> datetime:
     elapsed_hours = int((value - day_start).total_seconds() // 3600)
     batch_start_hour = (elapsed_hours // batch_hours) * batch_hours
     return day_start + timedelta(hours=batch_start_hour)
+
+
+def initial_batch_start(value: datetime) -> datetime:
+    """Return the aggregate-aligned start for the first remaining raw batch."""
+    bucket_minute = (
+        value.minute // LOG_10MIN_BUCKET_MINUTES
+    ) * LOG_10MIN_BUCKET_MINUTES
+    return value.replace(
+        minute=bucket_minute,
+        second=0,
+        microsecond=0,
+    )
+
+
+def initial_batch_end(value: datetime, batch_hours: int) -> datetime:
+    """Keep the first batch end on its original calendar boundary."""
+    return floor_to_batch(value, batch_hours) + timedelta(hours=batch_hours)
 
 
 def load_daily_aggregate_counts(
@@ -303,6 +326,7 @@ def main() -> int:
         processed_batches < args.max_batches
         and scanned_batches < scan_limit
     ):
+        first_batch_end = None
         if next_batch_start is None:
             oldest = raw_log.find_one(
                 {"datetime": {"$lt": args.cutoff}},
@@ -325,7 +349,23 @@ def main() -> int:
                 emit("blocked", reason="oldest datetime is not a BSON date")
                 return 2
 
-            batch_start = floor_to_batch(oldest_datetime, args.batch_hours)
+            calendar_batch_start = floor_to_batch(
+                oldest_datetime,
+                args.batch_hours,
+            )
+            batch_start = initial_batch_start(oldest_datetime)
+            first_batch_end = initial_batch_end(
+                oldest_datetime,
+                args.batch_hours,
+            )
+            if batch_start != calendar_batch_start:
+                emit(
+                    "initial_batch_start_adjusted",
+                    oldest_datetime=oldest_datetime,
+                    calendar_batch_start=calendar_batch_start,
+                    calendar_batch_end=first_batch_end,
+                    aggregate_batch_start=batch_start,
+                )
         else:
             batch_start = next_batch_start
 
@@ -340,7 +380,9 @@ def main() -> int:
             return 0
 
         batch_end = min(
-            batch_start + timedelta(hours=args.batch_hours),
+            first_batch_end
+            if first_batch_end is not None
+            else batch_start + timedelta(hours=args.batch_hours),
             args.cutoff,
         )
         query = {
