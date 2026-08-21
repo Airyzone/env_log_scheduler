@@ -227,7 +227,7 @@ if __name__ == "__main__":
         misfire_grace_time=3600
     )
 
-    # 註冊 check_alive 任務 (每 5 分鐘執行一次，實際 silent push 冷卻 10 分鐘)
+    # 註冊 check_alive 任務 (每 5 分鐘執行一次，實際 silent push 冷卻 30 分鐘)
     scheduler.add_job(
         run_check_alive,
         trigger=CronTrigger(
@@ -242,7 +242,7 @@ if __name__ == "__main__":
 
     logger.info("=" * 50)
     logger.info(f"獨立排程器已啟動，預計每日 {hour:02d}:{minute:02d} 執行任務")
-    logger.info("已排程 check_alive 任務，每 15 分鐘執行一次")
+    logger.info("已排程 check_alive 任務，每 5 分鐘執行一次")
     logger.info("=" * 50)
 
     try:
