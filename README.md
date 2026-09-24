@@ -24,6 +24,14 @@ GitHub Copilot - 2025-12-19 15:15:00
    python main.py
    ```
 
+### 型別檢查
+啟用專案虛擬環境後安裝開發工具：
+```bash
+source .venv/bin/activate
+python -m pip install -r requirements-dev.txt
+pyright
+```
+
 ### Docker 執行
 1. 建立映像檔：
    ```bash

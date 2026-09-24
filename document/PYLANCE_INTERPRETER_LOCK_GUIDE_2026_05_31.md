@@ -20,14 +20,14 @@
 
 1. 開啟 `env_log_scheduler` 任一 `.py` 檔。  
 2. 執行 `Python: Select Interpreter`，確認為：
-   - `/Users/ford/Documents/Code/Python/env_log_scheduler/.venv/bin/python`
+   - `${workspaceFolder}/.venv/bin/python`
 3. 執行 `Python: Restart Language Server`。
 4. 檢查 `Problems`（Source: Pylance）是否同步更新。
 
 ## 快速排錯（看到大量 import 錯誤時）
 
 1. 先確認 Interpreter 是否漂移到其他 root。  
-2. 重新選回 `env_log_scheduler/.venv/bin/python`。  
+2. 重新選回 `${workspaceFolder}/.venv/bin/python`。
 3. 重啟 Language Server。  
 4. 如仍異常，執行 `Developer: Reload Window` 後再檢查。
 

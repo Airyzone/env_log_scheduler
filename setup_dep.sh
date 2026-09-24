@@ -54,6 +54,15 @@ if command -v uv >/dev/null 2>&1; then
 fi
 
 # 建立/啟用 venv (如果是 Linux/Mac)
+VENV_PYTHON=".venv/bin/python"
+if [ -d ".venv" ] && {
+    [ ! -x "$VENV_PYTHON" ] ||
+    ! "$VENV_PYTHON" -c 'import sys; raise SystemExit(sys.prefix == sys.base_prefix)' >/dev/null 2>&1
+}; then
+    echo "⚠️  現有 .venv 無法使用，正在重建..."
+    rm -rf ".venv"
+fi
+
 if [ ! -d ".venv" ]; then
     echo "📦 建立 .venv..."
     if command -v uv >/dev/null 2>&1; then
@@ -67,7 +76,13 @@ fi
 if [ -f ".venv/bin/activate" ]; then
     source .venv/bin/activate
 else
-    echo "⚠️  警告: 無法啟用 .venv，將嘗試直接安裝"
+    echo "⚠️  警告: 找不到 .venv/bin/activate"
+fi
+
+EXPECTED_VENV="$(cd .venv && pwd -P)"
+if ! python -c 'import os, sys; raise SystemExit(os.path.realpath(sys.prefix) != os.path.realpath(sys.argv[1]))' "$EXPECTED_VENV" >/dev/null 2>&1; then
+    echo "❌ .venv 啟用失敗，停止安裝以避免寫入全域 Python 環境"
+    exit 1
 fi
 
 echo "🚀 開始安裝依賴..."
