@@ -1,33 +1,26 @@
-# ----------------------------------------------------
-# 應用程式直接依賴 (請確認名稱和版本)
-# ----------------------------------------------------
-Flask==1.1.2         # 必須鎖定 Flask 1.x (與應用程式架構一致)
+# 與 Python/env 的 Python 3.12 runtime 對齊；部署使用 requirements.lock。
+Flask==3.0.3
 Flask-Cors==3.0.10
 python-dotenv==0.21.0
 idworker==1.0.1
-pymongo==4.3.3       # 保持 PyMongo 版本
-firebase-admin       # Firebase Cloud Messaging
-google-api-core<2.18.0 # Pin google-api-core for Python 3.8 compatibility
-importlib-metadata   # Fix for Python 3.8 compatibility (google-api-core)
-APScheduler==3.10.1   # 排程工具
-
-
-
-# 數據科學庫鎖定到兼容 Python 3.8 的版本
-# Pandas 2.0.x 不兼容 Python 3.8
-pandas<1.4
-numpy==1.21.6
-
-# ----------------------------------------------------
-# 解決 Flask 核心依賴衝突 (Transitive Dependencies Fixes)
-# ----------------------------------------------------
-gunicorn              # 保持 gunicorn
-PyJWT<2.4.0           # 鎖定 PyJWT 兼容 Python 3.8 的版本
-cryptography          # Life push token encryption/decryption for chat outbox FCM
-jinja2<3.0            # 解決 Flask 1.x 導入問題
-werkzeug<2.0          # 解決 Flask 1.x 導入問題
-itsdangerous<2.0      # 解決 Flask 1.x 導入問題
-MarkupSafe<2.0        # 解決 Jinja2 2.x 導入問題
-
-# 其他自動依賴 (通常可以不列出，但確保不與上面的鎖定衝突)
-# click, blinker, dnspython 等
+pymongo==4.3.3
+requests==2.34.2
+firebase-admin==6.9.0
+google-api-core==2.17.1
+google-auth==2.62.0
+cryptography==50.0.2
+google-cloud-kms==3.11.0
+google-crc32c==1.9.0
+pg8000==1.31.6
+importlib-metadata==10.1.0
+pandas==3.1.0
+numpy==2.5.4
+gunicorn==26.2.0
+PyJWT==2.15.1
+jinja2==3.1.6
+werkzeug==3.0.6
+itsdangerous==2.2.0
+MarkupSafe==2.1.5
+APScheduler==3.11.3
+packaging==26.3
+tzdata==2026.5

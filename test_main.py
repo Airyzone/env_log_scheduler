@@ -190,5 +190,22 @@ class PhoneLogCompactionJobTest(unittest.TestCase):
         run_mock.assert_not_called()
 
 
+class SchedulerTriggerCompatibilityTest(unittest.TestCase):
+    def test_taiwan_daily_and_five_minute_triggers_keep_existing_times(self):
+        from datetime import datetime, timedelta, timezone
+
+        taiwan = timezone(timedelta(hours=8))
+        now = datetime(2026, 10, 27, 2, 59, 59, tzinfo=taiwan)
+        daily = main.CronTrigger(hour=3, minute=0, timezone=main.SCHEDULER_TIMEZONE)
+        periodic = main.CronTrigger(minute="*/5", timezone=main.SCHEDULER_TIMEZONE)
+        expected = datetime(2026, 10, 27, 3, 0, 0, tzinfo=taiwan)
+        self.assertEqual(daily.get_next_fire_time(None, now), expected)
+        self.assertEqual(periodic.get_next_fire_time(None, now), expected)
+        self.assertEqual(
+            periodic.get_next_fire_time(expected, expected),
+            datetime(2026, 10, 27, 3, 5, 0, tzinfo=taiwan),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
