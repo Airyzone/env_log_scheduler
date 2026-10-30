@@ -15,6 +15,7 @@ from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
 from build_log_10min import build_log_10min
 from check_alive_task import run_check_alive
+from city_cup_lottery_task import run_city_cup_lottery
 from legacy_datetime import legacy_taiwan_now
 
 SCHEDULER_TIMEZONE = "Asia/Taipei"
@@ -212,6 +213,17 @@ if __name__ == "__main__":
     minute = int(os.environ.get("SCHEDULER_MINUTE", 0))
 
     scheduler = BlockingScheduler()
+
+    scheduler.add_job(
+        run_city_cup_lottery,
+        trigger=CronTrigger(minute='*', timezone=SCHEDULER_TIMEZONE),
+        id='city_cup_lottery_maintenance',
+        name='城市盃抽獎入帳與遞補',
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=60,
+    )
 
     # 註冊任務
     scheduler.add_job(
