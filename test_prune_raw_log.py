@@ -12,6 +12,8 @@ def _matches(document, query):
     for key, expected in query.items():
         actual = document.get(key)
         if isinstance(expected, dict):
+            if "$in" in expected and actual not in expected["$in"]:
+                return False
             if "$gte" in expected and not (
                 actual is not None and actual >= expected["$gte"]
             ):
@@ -54,6 +56,9 @@ class _Collection:
                 reverse=direction < 0,
             )
         return dict(matches[0]) if matches else None
+
+    def find(self, query, _projection=None):
+        return [dict(row) for row in self.documents if _matches(row, query)]
 
     def count_documents(self, query, **_kwargs):
         return sum(_matches(document, query) for document in self.documents)
@@ -102,7 +107,7 @@ class _Client:
 
 def _run_main(client, *arguments):
     output = StringIO()
-    with patch.object(prune_raw_log.pymongo, "MongoClient", return_value=client):
+    with patch.object(prune_raw_log.pymongo, "MongoClient", return_value=client), patch.object(prune_raw_log, "bucket_coverage_mismatches", return_value=0):
         with patch.object(
             prune_raw_log,
             "load_daily_aggregate_counts",
@@ -136,7 +141,7 @@ def _common_arguments():
         "--max-batches",
         "1",
         "--minimum-retention-days",
-        "30",
+        "90",
         "--pause-seconds",
         "0",
     )

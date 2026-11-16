@@ -27,6 +27,8 @@ def _matches(document, query):
 
         actual = document.get(key)
         if isinstance(expected, dict):
+            if "$in" in expected and actual not in expected["$in"]:
+                return False
             if "$gte" in expected and not (actual is not None and actual >= expected["$gte"]):
                 return False
             if "$gt" in expected and not (actual is not None and actual > expected["$gt"]):
@@ -189,14 +191,14 @@ def _invalid_record(timestamp, source_id="invalid"):
     }
 
 
-def test_invalid_only_batch_is_retained_and_next_batch_is_processed():
+def test_invalid_and_empty_days_do_not_consume_batch_limit():
     start = datetime(2021, 6, 30)
     client = _Client(
         raw_documents=[
             _invalid_record(start + compress_phone_log.timedelta(hours=1)),
             _valid_record(
-                datetime(2021, 7, 1, 1),
-                source_id="valid-next-day",
+                datetime(2024, 10, 16, 1),
+                source_id="valid-after-gap",
             ),
         ]
     )
@@ -206,11 +208,11 @@ def test_invalid_only_batch_is_retained_and_next_batch_is_processed():
         "--start",
         "2021-06-30T00:00:00",
         "--cutoff",
-        "2021-07-02T00:00:00",
+        "2024-10-17T00:00:00",
         "--batch-hours",
         "24",
         "--max-batches",
-        "2",
+        "1",
         "--minimum-retention-days",
         "30",
         "--pause-seconds",
@@ -220,13 +222,13 @@ def test_invalid_only_batch_is_retained_and_next_batch_is_processed():
 
     assert return_code == 0
     deleted_events = [event for event in events if event["event"] == "batch_deleted"]
-    assert len(deleted_events) == 2
-    assert deleted_events[0]["deleted"] == 0
-    assert deleted_events[0]["invalid_retained_count"] == 1
-    assert deleted_events[1]["deleted"] == 1
+    assert len(deleted_events) == 1
+    assert deleted_events[0]["start"] == "2024-10-16T00:00:00"
+    assert deleted_events[0]["deleted"] == 1
     assert len(client.env["phone_log"].documents) == 1
     assert client.env["phone_log"].documents[0]["uuid"] == ""
     assert len(client.env["phone_log_10min"].documents) == 1
+    assert events[-1]["event"] == "complete"
 
 
 def test_existing_compact_target_does_not_block_invalid_remainder():
@@ -263,6 +265,172 @@ def test_existing_compact_target_does_not_block_invalid_remainder():
 
     assert return_code == 0
     assert not any(event["event"] == "blocked" for event in events)
-    deleted_event = next(event for event in events if event["event"] == "batch_deleted")
-    assert deleted_event["deleted"] == 0
-    assert deleted_event["invalid_retained_count"] == 1
+    assert not any(event["event"] == "batch_deleted" for event in events)
+    assert events[-1]["event"] == "complete"
+    assert len(client.env["phone_log"].documents) == 1
+    assert client.env["phone_log_10min"].documents == [compacted]
+
+
+def test_separate_runs_resume_from_remaining_valid_raw_despite_old_invalid_rows():
+    client = _Client(raw_documents=[
+        _invalid_record(datetime(2022, 12, 16), "old-invalid"),
+        _valid_record(datetime(2023, 1, 20, 1), "first-valid"),
+        _valid_record(datetime(2024, 10, 16, 1), "second-valid"),
+    ])
+    arguments = (
+        "--cutoff", "2024-10-17T00:00:00",
+        "--max-batches", "1", "--pause-seconds", "0", "--execute",
+    )
+
+    code, first_events = _run_main(client, *arguments)
+    assert code == 0
+    assert first_events[-1]["event"] == "run_limit_reached"
+    assert first_events[-1]["next_start"] == "2024-10-16T00:00:00"
+    assert {r["_id"] for r in client.env["phone_log"].documents} == {
+        "old-invalid", "second-valid",
+    }
+
+    code, second_events = _run_main(client, *arguments)
+    assert code == 0
+    assert second_events[-1]["event"] == "complete"
+    assert len(client.env["phone_log_10min"].documents) == 2
+    assert [r["_id"] for r in client.env["phone_log"].documents] == ["old-invalid"]
+
+
+def test_dry_run_previews_first_valid_day_without_mutating_sources_or_targets():
+    rows = [
+        _invalid_record(datetime(2022, 12, 16), "old-invalid"),
+        _valid_record(datetime(2024, 10, 16, 1)),
+    ]
+    client = _Client(raw_documents=rows)
+
+    code, events = _run_main(client, "--cutoff", "2024-10-17T00:00:00")
+
+    assert code == 0
+    audit = next(r for r in events if r["event"] == "batch_audit")
+    assert audit["start"] == "2024-10-16T00:00:00"
+    assert audit["represented_count"] == audit["valid_source_count"] == 1
+    assert events[-1]["event"] == "dry_run_complete"
+    assert client.env["phone_log"].documents == rows
+    assert client.env["phone_log_10min"].documents == []
+
+
+def test_explicit_start_and_cutoff_keep_out_of_range_sources():
+    client = _Client(raw_documents=[
+        _valid_record(datetime(2023, 1, 20), "before-start"),
+        _valid_record(datetime(2024, 10, 16, 1), "in-range"),
+        _valid_record(datetime(2024, 10, 17), "at-cutoff"),
+    ])
+
+    code, events = _run_main(
+        client, "--start", "2024-01-01T00:00:00",
+        "--cutoff", "2024-10-17T00:00:00", "--execute", "--pause-seconds", "0",
+    )
+
+    assert code == 0
+    assert events[-1]["event"] == "complete"
+    assert {r["_id"] for r in client.env["phone_log"].documents} == {
+        "before-start", "at-cutoff",
+    }
+
+
+def test_existing_target_with_valid_raw_still_blocks_deletion():
+    source = _valid_record(datetime(2024, 10, 16, 1))
+    target = dict(source, _id="existing-target", source_count=1)
+    client = _Client(raw_documents=[source], compact_documents=[target])
+
+    code, events = _run_main(
+        client, "--cutoff", "2024-10-17T00:00:00", "--execute",
+    )
+
+    assert code == 5
+    assert events[-1]["event"] == "blocked"
+    assert client.env["phone_log"].documents == [source]
+    assert client.env["phone_log_10min"].documents == [target]
+
+
+def test_source_coverage_mismatch_keeps_raw_and_target_unchanged():
+    source = _valid_record(datetime(2024, 10, 16, 1))
+    client = _Client(raw_documents=[source])
+
+    with patch.object(compress_phone_log, "compress_batch", return_value=([], 1, 0.0, 0.0)):
+        code, events = _run_main(
+            client, "--cutoff", "2024-10-17T00:00:00", "--execute",
+        )
+
+    assert code == 3
+    assert events[-1]["event"] == "blocked"
+    assert client.env["phone_log"].documents == [source]
+    assert client.env["phone_log_10min"].documents == []
+
+
+def test_target_coverage_mismatch_never_deletes_raw():
+    source = _valid_record(datetime(2024, 10, 16, 1))
+    client = _Client(raw_documents=[source])
+
+    with patch.object(compress_phone_log, "represented_count", return_value=0):
+        code, events = _run_main(
+            client, "--cutoff", "2024-10-17T00:00:00", "--execute",
+        )
+
+    assert code == 6
+    assert events[-1]["event"] == "blocked"
+    assert client.env["phone_log"].documents == [source]
+
+
+def test_valid_batch_keeps_invalid_rows_from_the_same_day():
+    day = datetime(2024, 10, 16)
+    invalid = _invalid_record(day, "invalid-same-day")
+    client = _Client(raw_documents=[
+        invalid,
+        _valid_record(day + compress_phone_log.timedelta(hours=1)),
+    ])
+
+    code, events = _run_main(
+        client, "--cutoff", "2024-10-17T00:00:00", "--execute",
+    )
+
+    assert code == 0
+    audit = next(r for r in events if r["event"] == "batch_audit")
+    assert audit["raw_count"] == 2
+    assert audit["valid_source_count"] == audit["represented_count"] == 1
+    assert audit["invalid_count"] == 1
+    assert client.env["phone_log"].documents == [invalid]
+    assert len(client.env["phone_log_10min"].documents) == 1
+
+
+def test_v2_retry_after_target_write_and_late_raw_preserves_exact_ownership():
+    day = datetime(2024, 10, 16, 1)
+    source = _valid_record(day, 'first')
+    target = compress_phone_log.target_document({
+        'uuid': 'phone-1', 'datetime': day, 'lat': 25.033, 'lon': 121.5654,
+        'source_count': 1, 'source_id': 'first', 'source_start_datetime': day, 'source_end_datetime': day,
+    })
+    late = _valid_record(day + compress_phone_log.timedelta(minutes=5), 'late')
+    client = _Client([source, late], [target])
+    code, events = _run_main(client, '--cutoff', '2024-10-17T00:00:00', '--execute')
+    assert code == 0
+    assert not client.env['phone_log'].documents
+    rows = client.env['phone_log_10min'].documents
+    assert sum(row['source_count'] for row in rows) == 2
+    assert {row['source_id'] for row in rows} == {'first', 'late'}
+
+
+def test_new_raw_arriving_during_delete_is_retained_and_next_run_recovers():
+    day = datetime(2024, 10, 16, 1)
+    source = _valid_record(day, 'first')
+    late = _valid_record(day + compress_phone_log.timedelta(minutes=5), 'late')
+    client = _Client([source])
+    raw = client.env['phone_log']
+    original = raw.delete_many
+    def racing_delete(query, **kwargs):
+        raw.documents.append(late)
+        return original(query, **kwargs)
+    with patch.object(raw, 'delete_many', side_effect=racing_delete):
+        code, _ = _run_main(client, '--cutoff', '2024-10-17T00:00:00', '--execute')
+    assert code == 7
+    assert raw.documents == [late]
+    code, _ = _run_main(client, '--cutoff', '2024-10-17T00:00:00', '--execute')
+    assert code == 0
+    assert not raw.documents
+    assert sum(row['source_count'] for row in client.env['phone_log_10min'].documents) == 2

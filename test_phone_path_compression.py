@@ -105,3 +105,15 @@ def test_compressor_rejects_out_of_order_records():
         assert "sorted" in str(error)
     else:
         raise AssertionError("out-of-order records must be rejected")
+
+
+def test_cross_hour_sources_keep_exact_counts_and_ownership_without_anchor_duplication():
+    start = datetime(2026, 8, 19, 8, 49)
+    records = [_record(start + timedelta(minutes=i)) for i in (0, 5, 12, 20)]
+    compressed = compress_records(records)
+    assert sum(row['source_count'] for row in compressed) == 4
+    assert compressed[-1]['source_hour_counts'] == [
+        {'datetime': datetime(2026, 8, 19, 8), 'count': 1},
+        {'datetime': datetime(2026, 8, 19, 9), 'count': 2},
+    ]
+    assert compressed[-1]['source_ids'] == [row['_id'] for row in records[1:]]

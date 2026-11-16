@@ -98,6 +98,29 @@ def valid_query(start: datetime, end: datetime) -> Dict[str, Any]:
     return query
 
 
+def next_valid_batch_start(
+    raw_collection: Any,
+    start: Optional[datetime],
+    cutoff: datetime,
+    batch_hours: int,
+    max_time_ms: int,
+) -> Optional[datetime]:
+    """從仍未處理的有效 raw 續跑，不讓保留的無效資料重置進度。"""
+    oldest = raw_collection.find_one(
+        valid_query(start or datetime.min, cutoff),
+        {"_id": 0, "datetime": 1},
+        sort=[("datetime", pymongo.ASCENDING)],
+        hint=RAW_DATETIME_INDEX,
+        max_time_ms=max_time_ms,
+    )
+    if oldest is None:
+        return None
+    timestamp = oldest.get("datetime")
+    if not isinstance(timestamp, datetime):
+        raise ValueError("有效 phone_log 的 datetime 必須是 BSON date")
+    return floor_to_batch(timestamp, batch_hours)
+
+
 def source_pipeline(start: datetime, end: datetime) -> List[Dict[str, Any]]:
     return [
         {"$match": valid_query(start, end)},
@@ -125,6 +148,7 @@ def compress_batch(
     end: datetime,
     policy: CompressionPolicy,
     max_time_ms: int,
+    excluded_source_ids: Optional[set] = None,
 ) -> Tuple[List[Dict[str, Any]], int, float, float]:
     compressors: Dict[str, AdaptivePhonePathCompressor] = {}
     compacted: List[Dict[str, Any]] = []
@@ -138,6 +162,8 @@ def compress_batch(
     ).batch_size(5000)
     try:
         for record in cursor:
+            if excluded_source_ids and record.get("_id") in excluded_source_ids:
+                continue
             uuid = str(record.get("uuid") or "").strip()
             compressor = compressors.get(uuid)
             if compressor is None:
@@ -195,7 +221,7 @@ def target_document(output: Dict[str, Any]) -> Dict[str, Any]:
     )
     document = dict(output)
     document["_id"] = identity
-    document["compression_version"] = 1
+    document["compression_version"] = 2
     document["compression_mode"] = "adaptive_movement_turn_beacon"
     return document
 
@@ -252,7 +278,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--start",
         type=parse_datetime,
-        help="指定 dry-run/手動批次起點；未提供時從最舊 raw 批次開始",
+        help="指定 dry-run/手動批次起點；從範圍內最舊的有效 raw 批次開始",
     )
     parser.add_argument(
         "--batch-hours",
@@ -264,7 +290,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-batches",
         type=int,
         default=1,
-        help="本次最多處理幾批，預設只處理 1 批",
+        help="本次最多處理幾個含有效來源的批次，預設只處理 1 批",
     )
     parser.add_argument(
         "--minimum-retention-days",
@@ -368,7 +394,16 @@ def main() -> int:
         )
 
         while processed_batches < args.max_batches:
-            if next_batch_start is not None and next_batch_start >= args.cutoff:
+            # 每批直接尋找下一筆有效來源，略過空日期及刻意保留的無效 raw。
+            # 核對後才刪除有效來源，因此新程序也能從剩餘 raw 安全續跑。
+            batch_start = next_valid_batch_start(
+                raw_collection,
+                next_batch_start,
+                args.cutoff,
+                args.batch_hours,
+                args.max_time_ms,
+            )
+            if batch_start is None:
                 emit(
                     "complete",
                     processed_batches=processed_batches,
@@ -376,30 +411,6 @@ def main() -> int:
                     deleted_total=deleted_total,
                 )
                 return 0
-            if next_batch_start is None:
-                oldest = raw_collection.find_one(
-                    {"datetime": {"$lt": args.cutoff}},
-                    {"_id": 0, "datetime": 1},
-                    sort=[("datetime", pymongo.ASCENDING)],
-                    hint=RAW_DATETIME_INDEX,
-                    max_time_ms=args.max_time_ms,
-                )
-                if not oldest:
-                    emit(
-                        "complete",
-                        processed_batches=processed_batches,
-                        compacted_total=compacted_total,
-                        deleted_total=deleted_total,
-                    )
-                    return 0
-
-                oldest_datetime = oldest.get("datetime")
-                if not isinstance(oldest_datetime, datetime):
-                    emit("blocked", reason="oldest datetime is not a BSON date")
-                    return 2
-                batch_start = floor_to_batch(oldest_datetime, args.batch_hours)
-            else:
-                batch_start = next_batch_start
             batch_end = min(
                 batch_start + timedelta(hours=args.batch_hours), args.cutoff
             )
@@ -416,6 +427,29 @@ def main() -> int:
                 maxTimeMS=args.max_time_ms,
             )
             invalid_count = raw_count - valid_count
+            existing = list(compact_collection.aggregate([
+                {"$match": raw_query}
+            ], maxTimeMS=args.max_time_ms))
+            existing_ids = set()
+            existing_represented = 0
+            for row in existing:
+                count = row.get("source_count", 0)
+                ids = row.get("source_ids", [row.get("source_id")])
+                if (row.get("compression_version", 1) < 2 or type(count) is not int
+                        or count < 1 or len(ids) != count or None in ids
+                        or len(set(ids)) != count or existing_ids.intersection(ids)):
+                    emit("blocked", reason="舊版或來源資訊不完整的 compact 與 raw 重疊，保留 raw")
+                    return 5
+                existing_ids.update(ids)
+                existing_represented += count
+            existing_raw_count = 0
+            identity_list = list(existing_ids)
+            for offset in range(0, len(identity_list), 1000):
+                existing_raw_count += raw_collection.count_documents(
+                    {**valid_source_query, "_id": {"$in": identity_list[offset:offset + 1000]}},
+                    maxTimeMS=args.max_time_ms,
+                )
+            valid_count -= existing_raw_count
             (
                 compacted,
                 source_valid_count,
@@ -427,6 +461,7 @@ def main() -> int:
                 batch_end,
                 policy,
                 args.max_time_ms,
+                excluded_source_ids=existing_ids,
             )
             represented = sum(
                 int(output.get("source_count") or 0) for output in compacted
@@ -452,6 +487,7 @@ def main() -> int:
                 end=batch_end,
                 raw_count=raw_count,
                 valid_source_count=valid_count,
+                already_represented_raw_count=existing_raw_count,
                 compressed_point_count=len(compacted),
                 represented_count=represented,
                 invalid_count=invalid_count,
@@ -488,7 +524,7 @@ def main() -> int:
             # raw. If valid rows are present and the target already exists,
             # keep the original safety block; an empty compacted result can
             # safely advance past an invalid-only remainder batch.
-            if existing_target_count and compacted:
+            if existing_target_count != len(existing):
                 emit(
                     "blocked",
                     reason="compact target 該時間批次已有資料，避免覆蓋或重複刪除",
@@ -507,7 +543,7 @@ def main() -> int:
                 target_represented = represented_count(
                     compact_collection, batch_start, batch_end
                 )
-                if target_count != len(compacted) or target_represented != valid_count:
+                if target_count != len(existing) + len(compacted) or target_represented != existing_represented + valid_count:
                     emit(
                         "blocked",
                         reason="compact target 寫入後覆蓋率驗證失敗",
@@ -518,31 +554,36 @@ def main() -> int:
                     )
                     return 6
 
-            delete_result = raw_collection.delete_many(
-                valid_source_query,
-                hint=RAW_DATETIME_INDEX,
-                comment=(
-                    "phone-log-compressor "
-                    f"{batch_start.isoformat()}..{batch_end.isoformat()}"
-                ),
-            )
+            source_ids = [identity for output in compacted for identity in
+                          output.get("source_ids", [output.get("source_id")])]
+            if len(source_ids) != valid_count or len(set(source_ids)) != valid_count or None in source_ids:
+                emit("blocked", reason="來源識別資訊不完整，保留 raw")
+                return 7
+            source_ids.extend(existing_ids)
+            deleted_count = 0
+            for offset in range(0, len(source_ids), 1000):
+                delete_result = raw_collection.delete_many(
+                    {**valid_source_query, "_id": {"$in": source_ids[offset:offset + 1000]}},
+                    comment="phone-log-compressor verified source IDs",
+                )
+                deleted_count += delete_result.deleted_count
             remaining = raw_collection.count_documents(
                 valid_source_query,
                 hint=RAW_DATETIME_INDEX,
                 maxTimeMS=args.max_time_ms,
             )
-            if remaining != 0 or delete_result.deleted_count != valid_count:
+            if remaining != 0 or deleted_count != valid_count + existing_raw_count:
                 emit(
                     "blocked",
                     reason="raw delete 後驗證不一致",
                     expected_deleted=valid_count,
-                    deleted=delete_result.deleted_count,
+                    deleted=deleted_count,
                     remaining=remaining,
                 )
                 return 7
 
             processed_batches += 1
-            deleted_total += delete_result.deleted_count
+            deleted_total += deleted_count
             next_batch_start = batch_end
             emit(
                 "batch_deleted",
@@ -550,18 +591,26 @@ def main() -> int:
                 start=batch_start,
                 end=batch_end,
                 compacted=written,
-                deleted=delete_result.deleted_count,
+                deleted=deleted_count,
                 deleted_total=deleted_total,
                 invalid_retained_count=invalid_count,
             )
             if processed_batches < args.max_batches and args.pause_seconds > 0:
                 time.sleep(args.pause_seconds)
 
+        pending_start = next_valid_batch_start(
+            raw_collection,
+            next_batch_start,
+            args.cutoff,
+            args.batch_hours,
+            args.max_time_ms,
+        )
         emit(
-            "run_limit_reached",
+            "run_limit_reached" if pending_start is not None else "complete",
             processed_batches=processed_batches,
             compacted_total=compacted_total,
             deleted_total=deleted_total,
+            next_start=pending_start,
         )
         return 0
     finally:

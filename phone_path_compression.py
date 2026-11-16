@@ -139,6 +139,8 @@ class AdaptivePhonePathCompressor:
         self._pending_start: Optional[Record] = None
         self._pending_count = 0
         self._pending_beacons: Set[str] = set()
+        self._pending_hours: Dict[datetime, int] = {}
+        self._pending_ids: List[Any] = []
 
     def add(self, record: Record) -> Optional[Record]:
         current = normalize_record(record)
@@ -155,6 +157,9 @@ class AdaptivePhonePathCompressor:
             raise ValueError("phone records must be sorted by datetime")
 
         self._pending_beacons.update(current["beacons"])
+        hour = current["datetime"].replace(minute=0, second=0, microsecond=0)
+        self._pending_hours[hour] = self._pending_hours.get(hour, 0) + 1
+        self._pending_ids.append(current.get("_id"))
         if self._last_kept is None:
             self._last_raw = current
             self._last_kept = current
@@ -228,12 +233,20 @@ class AdaptivePhonePathCompressor:
         }
         if self._pending_beacons:
             output["beacon_ids"] = sorted(self._pending_beacons)
+        if self._pending_count > 1:
+            output["source_hour_counts"] = [
+                {"datetime": hour, "count": count}
+                for hour, count in sorted(self._pending_hours.items())
+            ]
+            output["source_ids"] = list(self._pending_ids)
         return output
 
     def _reset_pending(self, current: Record) -> None:
         self._pending_start = current
         self._pending_count = 0
         self._pending_beacons = set(current["beacons"])
+        self._pending_hours = {}
+        self._pending_ids = []
 
 
 def compress_records(

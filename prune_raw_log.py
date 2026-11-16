@@ -211,8 +211,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--minimum-retention-days",
         type=int,
-        default=30,
-        help="cutoff 至少要保留幾天，預設 30 天",
+        default=90,
+        help="cutoff 至少要保留幾天，預設 90 天",
     )
     parser.add_argument(
         "--pause-seconds",
@@ -242,6 +242,26 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def bucket_coverage_mismatches(raw_log, log_10min, start, end, max_time_ms):
+    """總筆數相同仍可能有缺桶；刪除前逐物件、逐十分鐘核對。"""
+    rows = raw_log.aggregate([
+        {"$match": {"datetime": {"$gte": start, "$lt": end}, "thing_id": {"$ne": None}}},
+        {"$group": {"_id": {"thing_id": "$thing_id", "bucket": {"$subtract": [
+            {"$toLong": "$datetime"}, {"$mod": [{"$toLong": "$datetime"}, 600000]}]}},
+            "count": {"$sum": 1}}},
+    ], allowDiskUse=True, maxTimeMS=max_time_ms)
+    expected = {(row["_id"]["thing_id"], row["_id"]["bucket"]): row["count"] for row in rows}
+    epoch = datetime(1970, 1, 1)
+    actual = {}
+    duplicate = set()
+    for row in log_10min.find({"datetime": {"$gte": start, "$lt": end}}, {"thing_id": 1, "datetime": 1, "count": 1}):
+        key = (row.get("thing_id"), int((row["datetime"] - epoch).total_seconds() * 1000))
+        if key in actual:
+            duplicate.add(key)
+        actual[key] = row.get("count", 0)
+    return sum(1 for key in expected.keys() | actual.keys() if expected.get(key) != actual.get(key) or key in duplicate)
+
+
 def main() -> int:
     load_dotenv()
     args = build_parser().parse_args()
@@ -261,8 +281,8 @@ def main() -> int:
         raise SystemExit("--max-batches 必須大於 0")
     if args.max_scanned_batches is not None and args.max_scanned_batches <= 0:
         raise SystemExit("--max-scanned-batches 必須大於 0")
-    if args.minimum_retention_days < 7:
-        raise SystemExit("--minimum-retention-days 不得小於原設計的 7 天")
+    if args.minimum_retention_days < 90:
+        raise SystemExit("--minimum-retention-days 不得小於補傳上限 90 天")
 
     now = legacy_taiwan_now()
     latest_allowed_cutoff = now - timedelta(
@@ -274,6 +294,7 @@ def main() -> int:
             f"至少必須保留 {args.minimum_retention_days} 天，"
             f"目前最晚允許 {latest_allowed_cutoff.isoformat()}"
         )
+    args.cutoff = initial_batch_start(args.cutoff)
 
     mongodb_url = os.environ.get("MONGODB_URL", DEFAULT_MONGODB_URL)
     client = pymongo.MongoClient(
@@ -418,6 +439,11 @@ def main() -> int:
         coverage_matches = (
             raw_count == represented_count + null_thing_count
         )
+        mismatched_buckets = 0
+        if coverage_matches:
+            mismatched_buckets = bucket_coverage_mismatches(
+                raw_log, log_10min, batch_start, batch_end, args.max_time_ms)
+            coverage_matches = mismatched_buckets == 0
         scanned_batches += 1
 
         emit(
@@ -429,6 +455,7 @@ def main() -> int:
             represented_count=represented_count,
             null_thing_count=null_thing_count,
             coverage_matches=coverage_matches,
+            mismatched_buckets=mismatched_buckets,
         )
 
         if not coverage_matches:
@@ -461,38 +488,41 @@ def main() -> int:
             )
             return 0
 
-        delete_result = raw_log.delete_many(
-            query,
-            hint=RAW_DATETIME_INDEX,
-            comment=(
-                "raw-log-pruner "
-                f"{batch_start.isoformat()}..{batch_end.isoformat()}"
-            ),
-        )
+        source_ids = [row["_id"] for row in raw_log.find(query, {"_id": 1})]
+        if len(source_ids) != raw_count:
+            emit("blocked", reason="驗證期間 raw 已改變，保留來源並等待下次重算")
+            return 4
+        deleted_count = 0
+        for offset in range(0, len(source_ids), 1000):
+            result = raw_log.delete_many(
+                {**query, "_id": {"$in": source_ids[offset:offset + 1000]}},
+                comment="raw-log-pruner verified source IDs",
+            )
+            deleted_count += result.deleted_count
         remaining = raw_log.count_documents(
             query,
             hint=RAW_DATETIME_INDEX,
             maxTimeMS=args.max_time_ms,
         )
-        if remaining != 0 or delete_result.deleted_count != raw_count:
+        if remaining != 0 or deleted_count != raw_count:
             emit(
                 "blocked",
                 reason="刪除後驗證不一致",
                 expected_deleted=raw_count,
-                deleted=delete_result.deleted_count,
+                deleted=deleted_count,
                 remaining=remaining,
             )
             return 4
 
         processed_batches += 1
-        deleted_total += delete_result.deleted_count
+        deleted_total += deleted_count
         next_batch_start = batch_end
         emit(
             "batch_deleted",
             batch=processed_batches,
             start=batch_start,
             end=batch_end,
-            deleted=delete_result.deleted_count,
+            deleted=deleted_count,
             deleted_total=deleted_total,
         )
 

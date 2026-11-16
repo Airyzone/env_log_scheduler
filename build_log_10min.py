@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 import argparse
 from dotenv import load_dotenv
 from legacy_datetime import legacy_taiwan_now
+from sensor_rollup import floor_bucket, rollup_pipeline, write_rollups
 
 load_dotenv()
 
@@ -114,7 +115,6 @@ def build_log_10min(thing_id=None, days=None, batch_days=7, force=False, delay=0
     if not force:
         print(f"智能模式：將跳過已處理的時間範圍")
 
-    interval_ms = 10 * 60 * 1000  # 10 分鐘
     now = legacy_taiwan_now()
     total_things_processed = 0
     total_records_inserted = 0
@@ -128,14 +128,10 @@ def build_log_10min(thing_id=None, days=None, batch_days=7, force=False, delay=0
             start_datetime = now - timedelta(days=days)
             end_datetime = now
         elif status and not force:
-            # 智能模式：從上次處理的時間點開始（往前推 1 天確保完整）
-            start_datetime = status["last_processed"] - timedelta(days=1)
+            # 補傳 API 接受 90 天，回看必須至少涵蓋同一範圍。
+            lookback = max(90, int(os.environ.get("LOG_AGGREGATION_LOOKBACK_DAYS", "90")))
+            start_datetime = now - timedelta(days=lookback)
             end_datetime = now
-
-            # 如果已經是最新的，跳過
-            if (now - status["last_processed"]).total_seconds() < 600:  # 10 分鐘內
-                print(f"[{idx+1}/{len(thing_ids)}] thing_id {tid}: 已是最新，跳過")
-                continue
         else:
             # 全新處理：找出該 thing_id 最早的資料
             oldest = log_db.find_one(
@@ -153,62 +149,23 @@ def build_log_10min(thing_id=None, days=None, batch_days=7, force=False, delay=0
             f"  時間範圍: {start_datetime.strftime('%Y-%m-%d') if hasattr(start_datetime, 'strftime') else str(start_datetime)} ~ {end_datetime.strftime('%Y-%m-%d') if hasattr(end_datetime, 'strftime') else str(end_datetime)}")
 
         # 分批處理
-        current_start = start_datetime
+        current_start = floor_bucket(start_datetime)
         thing_inserted = 0
 
         while current_start < end_datetime:
             current_end = min(
                 current_start + timedelta(days=batch_days), end_datetime)
 
-            # 先刪除這個範圍內的舊資料（確保更新）
-            log_10min_db.delete_many({
-                "thing_id": tid,
-                "datetime": {"$gte": current_start, "$lt": current_end}
-            })
-
-            # 聚合
-            pipeline = [
-                {"$match": {
-                    "thing_id": tid,
-                    "datetime": {"$gte": current_start, "$lt": current_end}
-                }},
-                {"$addFields": {
-                    "timeBucket": {
-                        "$subtract": [
-                            {"$toLong": "$datetime"},
-                            {"$mod": [{"$toLong": "$datetime"}, interval_ms]}
-                        ]
-                    }
-                }},
-                {"$group": {
-                    "_id": "$timeBucket",
-                    "thing_id": {"$first": "$thing_id"},
-                    "temperature": {"$avg": "$temperature"},
-                    "humidity": {"$avg": "$humidity"},
-                    "battery": {"$avg": "$battery"},
-                    "rssi": {"$avg": "$rssi"},
-                    "count": {"$sum": 1}
-                }},
-                {"$addFields": {
-                    "datetime": {"$toDate": "$_id"}
-                }},
-                {"$project": {
-                    "_id": 0,
-                    "thing_id": 1,
-                    "datetime": 1,
-                    "temperature": 1,
-                    "humidity": 1,
-                    "battery": 1,
-                    "rssi": 1,
-                    "count": 1
-                }}
-            ]
-
-            results = list(log_db.aggregate(pipeline, allowDiskUse=True))
-
-            if results:
-                log_10min_db.insert_many(results)
-                thing_inserted += len(results)
+            # 先算完再更新；不先刪除，也不以已被清理的殘缺 raw 覆蓋較完整彙整。
+            results = list(log_db.aggregate(
+                rollup_pipeline(tid, current_start, current_end), allowDiskUse=True
+            ))
+            written, protected = write_rollups(
+                log_10min_db, tid, current_start, current_end, results
+            )
+            thing_inserted += written
+            if protected:
+                print(f"  保留 {protected} 個歷史桶：raw 已不完整，未覆蓋")
 
             if results:
                 print(f"  {current_start.strftime('%Y-%m-%d') if hasattr(current_start, 'strftime') else str(current_start)} ~ {current_end.strftime('%Y-%m-%d') if hasattr(current_end, 'strftime') else str(current_end)}: "

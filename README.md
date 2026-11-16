@@ -6,8 +6,8 @@ GitHub Copilot - 2025-12-19 15:15:00
 
 ## 功能
 - 每日定時將 `log` 表的原始資料聚合成 10 分鐘粒度，存入 `log_10min` 表。
-- 支援智能增量更新，自動跳過已處理的資料。
-- 預聚合成功後，逐批核對 `log_10min.count` 再清理超過 30 天的 raw log。
+- 每日回看至少 90 天，涵蓋 API 允許的延遲補傳；不以殘缺 raw 覆蓋較完整彙整。
+- 預聚合成功後，逐批核對 `log_10min.count` 再清理超過 90 天的 raw log。
 - 支援 Docker 部署。
 
 ## 安裝與執行
@@ -55,10 +55,10 @@ python build_log_10min.py --force            # 強制重新處理所有資料
 
 ## Raw log 保留設定
 
-預設保留 30 天，且程式不允許低於 30 天：
+預設保留 90 天，且程式不允許低於 API 補傳上限 90 天：
 
 ```bash
-RAW_LOG_RETENTION_DAYS=30
+RAW_LOG_RETENTION_DAYS=90
 RAW_LOG_PRUNE_BATCH_HOURS=24
 RAW_LOG_PRUNE_MAX_BATCHES=7
 RAW_LOG_PRUNE_PAUSE_SECONDS=2
@@ -98,3 +98,15 @@ PHONE_LOG_COMPACTION_EXECUTE=0
 聚合覆蓋率驗證通過後刪除已表示的 raw rows。無法用於手機軌跡的 invalid
 raw rows 會保留在原集合中，不會阻擋同批有效資料壓縮；invalid 清理需另行
 執行並逐批驗證。
+
+歷史回補每次從尚未處理的最早有效 raw 開始，空日期與只有 invalid raw
+的日期不消耗 `--max-batches`。成功批次核對並清理後，下一次執行會從剩餘
+有效 raw 續跑，保留的 invalid raw 不會把進度拉回舊日期。
+
+`run_limit_reached` 表示尚有有效歷史資料待處理，`next_start` 是下一個有效
+批次；`complete` 才表示指定 cutoff 之前已無符合條件的待處理來源。
+v2 壓縮資料保留來源 IDs 與每小時筆數，可去重續跑中斷批次與晚到資料；舊版來源不明的重疊資料仍會停止並保留 raw。
+
+感測 v2 彙整保留 `sources`（detector_id、uuid、beacon_id 與 count）以及各感測值的有效樣本數。清理除了總筆數，還逐物件與十分鐘桶比對，僅刪除已驗證的來源 IDs。
+
+每日 04:00 的保留維護跟隨正式 env 槽位，執行 `scripts/process_data_retention.py --limit 200 --apply`。API 槽位設定 `DATA_RETENTION_ENABLED=1` 才啟用，僅回補 AI 除錯／生成統計紀錄的到期時間。City Cup 業務資料依使用者指示保留，不納入這個工作；`CITYCUP_DATA_PURGE_ENABLED` 預設為 `0`，證據與抽獎歷史清理均停用，獎勵入帳與抽獎處理仍可正常執行。

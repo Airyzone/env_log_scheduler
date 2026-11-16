@@ -17,7 +17,7 @@ class RawLogPruneJobTest(unittest.TestCase):
     @patch.dict(
         os.environ,
         {
-            "RAW_LOG_RETENTION_DAYS": "30",
+            "RAW_LOG_RETENTION_DAYS": "90",
             "RAW_LOG_PRUNE_BATCH_HOURS": "24",
             "RAW_LOG_PRUNE_MAX_BATCHES": "7",
             "RAW_LOG_PRUNE_PAUSE_SECONDS": "2",
@@ -38,7 +38,7 @@ class RawLogPruneJobTest(unittest.TestCase):
         self.assertEqual(command[command.index("--max-batches") + 1], "7")
         self.assertEqual(
             command[command.index("--minimum-retention-days") + 1],
-            "30",
+            "90",
         )
         run_mock.assert_called_once_with(
             command,
@@ -50,7 +50,7 @@ class RawLogPruneJobTest(unittest.TestCase):
     @patch.dict(
         os.environ,
         {
-            "RAW_LOG_RETENTION_DAYS": "30",
+            "RAW_LOG_RETENTION_DAYS": "90",
             "RAW_LOG_PRUNE_BATCH_HOURS": "24",
             "RAW_LOG_PRUNE_MAX_BATCHES": "7",
             "RAW_LOG_PRUNE_MAX_SCANNED_BATCHES": "70",
@@ -75,12 +75,12 @@ class RawLogPruneJobTest(unittest.TestCase):
 
     @patch.dict(
         os.environ,
-        {"RAW_LOG_RETENTION_DAYS": "29"},
+        {"RAW_LOG_RETENTION_DAYS": "89"},
         clear=False,
     )
     @patch("main.subprocess.run")
-    def test_prune_job_rejects_retention_below_30_days(self, run_mock):
-        with self.assertRaisesRegex(ValueError, "不得小於 30"):
+    def test_prune_job_rejects_retention_below_90_days(self, run_mock):
+        with self.assertRaisesRegex(ValueError, "不得小於 90"):
             main.job_prune_raw_log()
 
         run_mock.assert_not_called()
@@ -88,7 +88,7 @@ class RawLogPruneJobTest(unittest.TestCase):
     @patch.dict(
         os.environ,
         {
-            "RAW_LOG_RETENTION_DAYS": "30",
+            "RAW_LOG_RETENTION_DAYS": "90",
             "RAW_LOG_PRUNE_BATCH_HOURS": "24",
             "RAW_LOG_PRUNE_MAX_BATCHES": "7",
             "RAW_LOG_PRUNE_PAUSE_SECONDS": "2",
@@ -144,6 +144,33 @@ class RawLogPruneJobTest(unittest.TestCase):
 
 
 class PhoneLogCompactionJobTest(unittest.TestCase):
+    @patch.dict(os.environ, {"PHONE_LOG_COMPACTION_ENABLED": "1"}, clear=False)
+    @patch("main.subprocess.run")
+    def test_phone_compaction_logs_batch_limit_separately_from_completion(self, run_mock):
+        run_mock.return_value = Mock(
+            returncode=0,
+            stdout='{"event":"run_limit_reached","next_start":"2024-01-01T00:00:00"}\n',
+            stderr="",
+        )
+
+        with self.assertLogs("main", level="INFO") as logs:
+            main.job_compress_phone_log()
+
+        self.assertTrue(any("尚有歷史資料待處理" in line for line in logs.output))
+        self.assertFalse(any("已完成 cutoff" in line for line in logs.output))
+
+    @patch.dict(os.environ, {"PHONE_LOG_COMPACTION_ENABLED": "1"}, clear=False)
+    @patch("main.subprocess.run")
+    def test_phone_compaction_logs_verified_completion(self, run_mock):
+        run_mock.return_value = Mock(
+            returncode=0, stdout='{"event":"complete"}\n', stderr="",
+        )
+
+        with self.assertLogs("main", level="INFO") as logs:
+            main.job_compress_phone_log()
+
+        self.assertTrue(any("已完成 cutoff" in line for line in logs.output))
+
     @patch.dict(
         os.environ,
         {
@@ -209,3 +236,10 @@ class SchedulerTriggerCompatibilityTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_sensor_failure_does_not_skip_independent_phone_backfill():
+    with patch('main.build_log_10min', side_effect=RuntimeError('sensor failed')), patch('main.job_prune_raw_log') as prune, patch('main.job_compress_phone_log') as phone:
+        main.job_build_log_10min()
+    prune.assert_not_called()
+    phone.assert_called_once_with()

@@ -4,6 +4,7 @@ GitHub Copilot - 2025-12-19 15:05:00
 """
 
 import os
+import json
 import logging
 from logging.handlers import TimedRotatingFileHandler
 import subprocess
@@ -69,9 +70,9 @@ def _log_subprocess_output(label, stdout, stderr):
 
 def job_prune_raw_log():
     """僅清理已由 log_10min 完整涵蓋、且超過保留期的 raw log。"""
-    retention_days = int(os.environ.get("RAW_LOG_RETENTION_DAYS", 30))
-    if retention_days < 30:
-        raise ValueError("RAW_LOG_RETENTION_DAYS 不得小於 30")
+    retention_days = int(os.environ.get("RAW_LOG_RETENTION_DAYS", 90))
+    if retention_days < 90:
+        raise ValueError("RAW_LOG_RETENTION_DAYS 不得小於 90（補傳上限）")
 
     cutoff = (
         legacy_taiwan_now().replace(microsecond=0)
@@ -134,12 +135,11 @@ def job_build_log_10min():
         logger.info("log_10min 預聚合任務完成")
     except Exception as e:
         logger.error(f"log_10min 預聚合任務失敗: {e}", exc_info=True)
-        return
-
-    try:
-        job_prune_raw_log()
-    except Exception as e:
-        logger.error(f"raw log 清理任務失敗: {e}", exc_info=True)
+    else:
+        try:
+            job_prune_raw_log()
+        except Exception as e:
+            logger.error(f"raw log 清理任務失敗: {e}", exc_info=True)
 
     try:
         job_compress_phone_log()
@@ -204,15 +204,41 @@ def job_compress_phone_log():
         raise RuntimeError(
             f"phone_log 壓縮工具返回非零狀態: {result.returncode}"
         )
-    logger.info("phone_log 壓縮任務完成")
+    terminal_event = {}
+    for line in result.stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(event, dict):
+            terminal_event = event
+    event_name = terminal_event.get("event")
+    if event_name == "run_limit_reached":
+        logger.info(
+            "phone_log 壓縮已達本次批次上限，尚有歷史資料待處理，next_start=%s",
+            terminal_event.get("next_start"),
+        )
+    elif event_name == "complete":
+        logger.info("phone_log 壓縮已完成 cutoff 之前有效來源的回補")
+    elif event_name == "dry_run_complete":
+        logger.info("phone_log 壓縮預檢完成，未變更資料")
+    else:
+        logger.warning("phone_log 壓縮本次執行結束，未取得回補完成確認")
 
 
 if __name__ == "__main__":
+    from data_retention_task import run_data_retention
     # 從環境變數讀取排程時間，預設凌晨 3:00
     hour = int(os.environ.get("SCHEDULER_HOUR", 3))
     minute = int(os.environ.get("SCHEDULER_MINUTE", 0))
 
     scheduler = BlockingScheduler()
+
+    scheduler.add_job(
+        run_data_retention, trigger=CronTrigger(hour=4, minute=0, timezone=SCHEDULER_TIMEZONE),
+        id='data_retention_daily', name='每日舊資料保留維護', replace_existing=True,
+        coalesce=True, max_instances=1, misfire_grace_time=3600,
+    )
 
     scheduler.add_job(
         run_city_cup_lottery,

@@ -8,3 +8,6 @@ __pycache__/
 
 .python-runtime/
 .venv
+
+# Local CodeGraph index
+/.codegraph/

@@ -147,7 +147,7 @@ def process_thing_logs(client, thing_id, beacon_id, start_time, end_time):
                 # 實施方案 B: 若是因為跨日而切斷，且時間還算連續，則對齊 midnight
                 if is_same_detector and time_diff <= TIMEOUT and not is_same_day:
                     # 補齊舊日到 23:59:59
-                    current_session['leave'] = current_session['enter'].replace(hour=23, minute=59, second=59, microsecond=0)
+                    current_session['leave'] = current_session['enter'].replace(hour=23, minute=59, second=59, microsecond=999000)
                     raw_sessions.append(current_session)
                     # 新日從 00:00:00 開始
                     print(f"  [Midnight Split] {current_session['date'].strftime('%Y-%m-%d')} 補齊至 23:59:59")
@@ -213,7 +213,7 @@ def process_thing_logs(client, thing_id, beacon_id, start_time, end_time):
                         break 
                     else:
                         # 跨日且連續：兩邊補齊到午夜 (方案 B)
-                        target_session['leave'] = target_session['enter'].replace(hour=23, minute=59, second=59, microsecond=0)
+                        target_session['leave'] = target_session['enter'].replace(hour=23, minute=59, second=59, microsecond=999000)
                         current_segment['enter'] = current_segment['enter'].replace(hour=0, minute=0, second=0, microsecond=0)
                         print(f"  [Midnight Stretch] 對齊 {target_session['date'].strftime('%Y-%m-%d')} 與 {current_segment['date'].strftime('%Y-%m-%d')}")
                         # 依然是新紀錄，但已對齊
