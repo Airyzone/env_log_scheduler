@@ -68,7 +68,7 @@ def resolve_core_env_dir(
     return _validate_core_dir(root / slot_dir_name, required_file)
 
 
-def prepare_core_env_import(core_env_dir: str) -> None:
+def prepare_core_env_import(core_env_dir: str, *, config_env_dir: Optional[str] = None) -> None:
     """
     Put the resolved core env directory first in sys.path and load its .env.
     """
@@ -76,7 +76,7 @@ def prepare_core_env_import(core_env_dir: str) -> None:
         sys.path.remove(core_env_dir)
     sys.path.insert(0, core_env_dir)
 
-    dotenv_path = Path(core_env_dir) / ".env"
+    dotenv_path = Path(config_env_dir or core_env_dir) / ".env"
     if dotenv_path.exists():
         try:
             from dotenv import load_dotenv

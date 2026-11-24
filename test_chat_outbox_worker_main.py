@@ -1,10 +1,28 @@
 import sys
 import types
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import mock
 
 
 class ChatOutboxWorkerMainTest(unittest.TestCase):
+    def test_rollback_keeps_queue_capable_worker_in_the_other_slot(self):
+        from chat_outbox_worker_main import select_chat_worker_core
+
+        with TemporaryDirectory() as root, mock.patch.dict("os.environ", {}, clear=True):
+            old = Path(root) / "env_a"
+            new = Path(root) / "env_b"
+            old.mkdir()
+            new.mkdir()
+            (old / "chat_realtime.py").write_text("class OutboxWorker: pass\n")
+            (new / "chat_realtime.py").write_text("CHAT_PUSH_QUEUE_VERSION = 1\n")
+
+            self.assertEqual(select_chat_worker_core(new), new)
+            self.assertEqual(select_chat_worker_core(old), new)
+            with mock.patch.dict("os.environ", {"ENV_CORE_DIR": str(old)}):
+                self.assertEqual(select_chat_worker_core(old), old)
+
     def test_run_worker_uses_resolved_core_env_and_runs_outbox_worker(self):
         import chat_outbox_worker_main
 
